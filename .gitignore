@@ -1,0 +1,21 @@
+# Secrets & local runtime
+.env
+.env.*
+*.secret
+speak.secret
+**/credentials*.json
+**/quick-tunnel*.json
+**/quick-tunnel*.yml
+last_speak.mp3
+speak.log
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+dropbox/*.json
+!dropbox/README.md
+# Extra local
+config/config.json
+speak_url.txt
+*.mp3
+.venv/

@@ -1,0 +1,18 @@
+[Unit]
+Description=Cloudflare tunnel for Desk Atlas speak
+After=network-online.target desk-atlas-speak.service
+Wants=network-online.target
+Requires=desk-atlas-speak.service
+
+[Service]
+Type=simple
+User=atlas
+# Named tunnel (preferred once domain exists):
+# ExecStart=/usr/bin/cloudflared tunnel --config /opt/desk-atlas/cloudflared/config.yml run
+# Quick tunnel (Phase 0 / until named domain):
+ExecStart=/usr/bin/cloudflared tunnel --url http://127.0.0.1:8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
