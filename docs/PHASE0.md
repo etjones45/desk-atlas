@@ -1,21 +1,21 @@
-# Desk Atlas — Phase 0 (Ethan test)
+# Desk Jarvis — Phase 0 (Ethan test)
 
 Goal: prove **ears** (webhook in) and **mouth** (TTS out) before buying hardware.
 
-Routine: **Desk Atlas voice-in** (`desk-atlas-voice-in`). Soft owners: Hermes software, Daedalus cart, Atlas PM.
+Routine: **Desk Jarvis voice-in** (`desk-jarvis-voice-in`). Soft owners: Hermes software, Daedalus cart, Jarvis PM.
 
 ## Ears (webhook) — Ethan’s laptop
 
-1. Open the **Desk Atlas voice-in** routine panel in Grok Bot.
+1. Open the **Desk Jarvis voice-in** routine panel in Grok Bot.
 2. Copy the webhook **URL** and **sender key** yourself (never paste them into chat).
-3. From your laptop, fill placeholders in `phase0/curl-ears.example.sh` **locally** (or inline curl) and run. Confirm Atlas gets the text on the desk-work thread.
+3. From your laptop, fill placeholders in `phase0/curl-ears.example.sh` **locally** (or inline curl) and run. Confirm Jarvis gets the text on the desk-work thread.
 
 Do **not** write URL/key into committed config files.
 
 Typed stand-in (no webhook key needed — dropbox only on the shared computer):
 
 ```bash
-python3 phase0/laptop.py --text "Hey Atlas, phase 0 ears check"
+python3 phase0/laptop.py --text "Hey Jarvis, phase 0 ears check"
 ```
 
 ## Mouth (speak + tunnel)
@@ -23,13 +23,13 @@ python3 phase0/laptop.py --text "Hey Atlas, phase 0 ears check"
 1. Speak server:
 
    ```bash
-   ATLAS_PLAY=0 python3 software/speak/speak_server.py   # needs XAI_API_KEY in env for real TTS
+   JARVIS_PLAY=0 python3 software/speak/speak_server.py   # needs XAI_API_KEY in env for real TTS
    curl -s http://127.0.0.1:8080/health
    ```
 
-2. After `XAI_API_KEY` is set, start a Cloudflare tunnel and point Atlas at the public `/speak` URL (not the speak secret).
+2. After `XAI_API_KEY` is set, start a Cloudflare tunnel and point Jarvis at the public `/speak` URL (not the speak secret).
 
-3. Atlas POSTs short spoken lines to `{speak_url}` with body `{"text":"…","closer":true}` (and any local auth your speak server expects).
+3. Jarvis POSTs short spoken lines to `{speak_url}` with body `{"text":"…","closer":true}` (and any local auth your speak server expects).
 
 ## Laptop helpers
 
