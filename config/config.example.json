@@ -10,7 +10,7 @@
     "os": "Orange Pi Debian Bookworm server linux6.1"
   },
   "notes": {
-    "ears": "Set ATLAS_WEBHOOK_URL and ATLAS_SENDER_KEY in local .env only. Never commit keys.",
+    "ears": "Set JARVIS_WEBHOOK_URL and JARVIS_SENDER_KEY in local .env only. Never commit keys.",
     "mouth": "POST speak_url with JSON {text, closer:true}. Keep API keys and speak.secret out of git."
   }
 }
