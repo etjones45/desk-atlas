@@ -1,0 +1,11 @@
+# Named Cloudflare tunnel — use when Ethan has a domain / Zero Trust tunnel.
+# Until then, quick tunnel is fine:
+#   cloudflared tunnel --url http://127.0.0.1:8080
+#
+# tunnel: <TUNNEL_UUID>
+# credentials-file: /opt/desk-atlas/cloudflared/<TUNNEL_UUID>.json
+#
+# ingress:
+#   - hostname: desk-atlas.example.com
+#     service: http://127.0.0.1:8080
+#   - service: http_status:404

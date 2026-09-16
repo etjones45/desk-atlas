@@ -1,0 +1,16 @@
+{
+  "thread": "desk-work",
+  "speak_url": "https://YOUR-TUNNEL.example/speak",
+  "voice_id": "eve",
+  "speak_closer": true,
+  "hardware": {
+    "board": "Orange Pi Zero 2W 2GB",
+    "hat": "PiSugar WhisPlay",
+    "header": "hammer-in",
+    "os": "Orange Pi Debian Bookworm server linux6.1"
+  },
+  "notes": {
+    "ears": "Set ATLAS_WEBHOOK_URL and ATLAS_SENDER_KEY in local .env only. Never commit keys.",
+    "mouth": "POST speak_url with JSON {text, closer:true}. Keep API keys and speak.secret out of git."
+  }
+}
