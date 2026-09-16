@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desk Atlas ears CLI — record → xAI STT → voice-in webhook.
+"""Desk Jarvis ears CLI — record → xAI STT → voice-in webhook.
 
 Never posts a stub/placeholder transcript. On STT failure: write a dropbox
 note and exit nonzero.
@@ -24,13 +24,13 @@ from record import RecordError, record_wav  # noqa: E402
 from stt_xai import SttError, stt_file  # noqa: E402
 from webhook import WebhookError, post_voice_in  # noqa: E402
 
-# Resolve desk-atlas root: .../desk-atlas/ears/ears.py → parents[1]
+# Resolve desk-jarvis root: .../desk-jarvis/ears/ears.py → parents[1]
 _EARS_DIR = _HERE
 _BASE = _EARS_DIR.parent
-# On Pi layout ~/desk-atlas/ears → dropbox at ~/desk-atlas/dropbox
+# On Pi layout ~/desk-jarvis/ears → dropbox at ~/desk-jarvis/dropbox
 # Also accept env override.
 DROPBOX = Path(
-    os.environ.get("ATLAS_DROPBOX")
+    os.environ.get("JARVIS_DROPBOX")
     or (_BASE / "dropbox")
 )
 
@@ -72,19 +72,19 @@ def env_flags() -> dict:
     """Safe diagnostics — names only, no values."""
     return {
         "XAI_API_KEY": bool(os.environ.get("XAI_API_KEY", "").strip()),
-        "ATLAS_WEBHOOK_URL": bool(os.environ.get("ATLAS_WEBHOOK_URL", "").strip()),
-        "ATLAS_SENDER_KEY": bool(os.environ.get("ATLAS_SENDER_KEY", "").strip()),
+        "JARVIS_WEBHOOK_URL": bool(os.environ.get("JARVIS_WEBHOOK_URL", "").strip()),
+        "JARVIS_SENDER_KEY": bool(os.environ.get("JARVIS_SENDER_KEY", "").strip()),
     }
 
 
 def main() -> None:
-    # Load .env from desk-atlas root or ears/ parent (Pi: ~/desk-atlas/.env)
+    # Load .env from desk-jarvis root or ears/ parent (Pi: ~/desk-jarvis/.env)
     load_dotenv_quiet(_BASE / ".env")
     load_dotenv_quiet(_EARS_DIR / ".env")
     load_dotenv_quiet(Path.cwd() / ".env")
 
     p = argparse.ArgumentParser(
-        description="Desk Atlas ears: record → xAI STT → voice-in webhook"
+        description="Desk Jarvis ears: record → xAI STT → voice-in webhook"
     )
     p.add_argument(
         "--seconds",
