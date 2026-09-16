@@ -1,0 +1,199 @@
+{
+  "project": "desk-atlas-whisplay-case",
+  "board": "Orange Pi Zero 2W + Whisplay HAT",
+  "units": "mm",
+  "coordinate_system": {
+    "origin": "PCB corner at microSD short edge",
+    "x": "0..65 along length; X=0 microSD, X=65 screen/RGB end",
+    "y": "0..30 along width; Y=0 Mini-HDMI+2xUSB-C port edge, Y=30 GPIO/40-pin edge",
+    "z": "up from underside of bottom PCB"
+  },
+  "pcb": {
+    "footprint_xy": [
+      65.0,
+      30.0
+    ],
+    "thickness": 1.2,
+    "corner_radius": 3.0,
+    "mounting_holes": {
+      "diameter": 2.8,
+      "centers": [
+        [
+          3.5,
+          3.5
+        ],
+        [
+          61.5,
+          3.5
+        ],
+        [
+          3.5,
+          26.5
+        ],
+        [
+          61.5,
+          26.5
+        ]
+      ],
+      "note": "Pi Zero\u2013compatible pattern; M2.5 screws"
+    }
+  },
+  "whisplay": {
+    "display_glass_mm": [
+      37.0,
+      30.0
+    ],
+    "display_zone_pcb": {
+      "x0": 28.0,
+      "x1": 65.0,
+      "y0": 0.0,
+      "y1": 30.0
+    },
+    "screen_window_aperture": [
+      36.0,
+      29.0
+    ],
+    "screen_recess_depth": 0.6,
+    "mic_hole_diameter": 2.8,
+    "mic_centers_pcb": [
+      [
+        12.0,
+        10.0
+      ],
+      [
+        12.0,
+        20.0
+      ]
+    ],
+    "speaker_grille": {
+      "center": [
+        14.0,
+        15.0
+      ],
+      "hole_d": 1.6,
+      "pitch": 2.4,
+      "rows": 3,
+      "cols": 4
+    },
+    "rgb_led": {
+      "center": [
+        63.5,
+        15.0
+      ],
+      "diameter": 3.2
+    },
+    "click_button": {
+      "center": [
+        20.0,
+        6.0
+      ],
+      "diameter": 5.5
+    },
+    "face_openings_note": "Mic/speaker/button/LED positions approximated from photos + PiSugar HAT face layout; measure and tweak if needed."
+  },
+  "stack_height": {
+    "photo_estimate_total_mm": [
+      16,
+      20
+    ],
+    "assumed_header_gap_mm": 11.0,
+    "assumed_display_raise_mm": 2.5,
+    "standoff_under_pcb_mm": 2.0,
+    "internal_cavity_from_standoff_tops_to_lid_lip_mm": 22.0,
+    "note": "Cavity 22mm is intentional margin over ~17mm assumed stack (pcb+header+hat+glass)."
+  },
+  "case": {
+    "wall": 1.8,
+    "floor_t": 1.8,
+    "lid_t": 1.8,
+    "pcb_clearance": 0.5,
+    "outer_xyz": [
+      69.6,
+      34.6,
+      27.6
+    ],
+    "bottom_outer_height": 15.8,
+    "lid_wall_height": 13.0,
+    "split_z_above_floor": 14.0,
+    "lip_step_height": 1.2
+  },
+  "ports_orange_pi_zero_2w": {
+    "microSD": {
+      "edge": "X=0",
+      "slot_wy_h": [
+        14.0,
+        2.4
+      ]
+    },
+    "mini_hdmi": {
+      "edge": "Y=0",
+      "center_x": 12.5,
+      "cutout_wh": [
+        9.0,
+        4.2
+      ]
+    },
+    "usb_c_1": {
+      "edge": "Y=0",
+      "center_x": 40.5,
+      "cutout_wh": [
+        10.0,
+        4.0
+      ]
+    },
+    "usb_c_2": {
+      "edge": "Y=0",
+      "center_x": 53.5,
+      "cutout_wh": [
+        10.0,
+        4.0
+      ]
+    },
+    "antenna_notch": {
+      "edge": "Y=0",
+      "center_x": 58.0,
+      "diameter": 3.5
+    },
+    "ph20_speaker": {
+      "edge": "Y=0",
+      "center_x": 28.0,
+      "cutout_wh": [
+        8.0,
+        5.0
+      ]
+    },
+    "port_positions_note": "Centers approximated from Ethan's photos + Zero-form-factor layout; cutouts oversized. Verify on first print."
+  },
+  "fasteners": {
+    "type": "M2.5",
+    "entry": "from bottom through standoffs into lid posts",
+    "lid_pilot_d": 3.2,
+    "optional_heatset_pilot_d": 3.6,
+    "screen_end_posts": "braced to walls because screen window removes slab over X=61.5 holes"
+  },
+  "references_not_shipped": [
+    "PiSugar pisugar3-whisplay-chatbot-fdm (RPi+battery \u2014 HAT face ideas only)",
+    "Printables Ground Zero Whisplay case (RPi cutouts \u2014 HAT face ideas only)"
+  ],
+  "validation": {
+    "openscad": "2021.01",
+    "bottom": {
+      "components": 1,
+      "nonmanifold_edges": 0,
+      "triangles": 3060,
+      "bytes": 153084
+    },
+    "top": {
+      "components": 1,
+      "nonmanifold_edges": 0,
+      "triangles": 5080,
+      "bytes": 254084
+    },
+    "both": {
+      "components": 2,
+      "nonmanifold_edges": 0,
+      "triangles": 8140,
+      "bytes": 407084
+    }
+  }
+}
