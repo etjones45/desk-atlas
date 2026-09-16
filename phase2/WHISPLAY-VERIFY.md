@@ -4,7 +4,7 @@
 **Primary install:** PiSugar `script/install_orangepi_zero2w.sh` (matches Ethan’s Grok paste).  
 **Fallback only if 2.5 fails:** turfptax / Armbian community path (below).
 
-Systemd / tunnel still **HOLD** until Atlas says 2.5 green.
+Systemd / tunnel still **HOLD** until Jarvis says 2.5 green.
 
 ## 2.5 Primary — PiSugar Orange Pi script
 
@@ -23,7 +23,7 @@ Script is on PiSugar `main`/`master` at `script/install_orangepi_zero2w.sh`.
 
 After reboot, keep speaker volume ~70% (higher can distort).
 
-## Verify checklist (report to Atlas)
+## Verify checklist (report to Jarvis)
 
 ```bash
 # SPI (display bus on Zero 2W is SPI1)
@@ -48,11 +48,11 @@ aplay /tmp/whis-test.wav
 ```
 
 **2.5 green:** screen lights, speaker tone heard, mics round-trip, button works.  
-**Fail:** stop — do **not** install tunnel/systemd. Paste script output + verify failures to Atlas.
+**Fail:** stop — do **not** install tunnel/systemd. Paste script output + verify failures to Jarvis.
 
 ## Fallback — only if primary 2.5 fails
 
-Community Orange Pi path (turfptax prefers Armbian Noble upstream; adapt to Bookworm if staying on official image, or reflash Armbian only if Atlas agrees):
+Community Orange Pi path (turfptax prefers Armbian Noble upstream; adapt to Bookworm if staying on official image, or reflash Armbian only if Jarvis agrees):
 
 ```bash
 git clone https://github.com/turfptax/orangepi-whisplay.git

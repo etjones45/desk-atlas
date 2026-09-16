@@ -41,7 +41,7 @@ Or `sudo nmtui`. Optional first-boot file on the SD boot partition: copy `orange
 ## Then software (still Ethan-run)
 
 - [ ] Run WhisPlay **primary** install: `cd Whisplay && sudo bash script/install_orangepi_zero2w.sh` then reboot (see `WHISPLAY-VERIFY.md`; turfptax only if 2.5 fails)
-- [ ] Reboot; run verify commands; report pass/fail + script output to Atlas
+- [ ] Reboot; run verify commands; report pass/fail + script output to Jarvis
 - [ ] Place `XAI_API_KEY` on Pi himself (see `KEY-HANDOFF.md`) — never paste into chat
-- [ ] Copy/run `phase2/package/install-desk-atlas.sh` when ready
-- [ ] **Do not enable** `systemd-HOLD-UNTIL-2.5/` units until Atlas says **2.5 green**
+- [ ] Copy/run `phase2/package/install-desk-jarvis.sh` when ready
+- [ ] **Do not enable** `systemd-HOLD-UNTIL-2.5/` units until Jarvis says **2.5 green**

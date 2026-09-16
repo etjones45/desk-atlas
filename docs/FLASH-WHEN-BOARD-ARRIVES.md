@@ -6,4 +6,4 @@ Use **`phase2/`** in this repo:
 - `FLASH-CHECKLIST.md` — Ethan steps + default `orangepi`/`orangepi` login
 - `WHISPLAY-VERIFY.md` — install + verify
 - `package/` — speak_server install
-- `systemd-HOLD-UNTIL-2.5/` — hold until Atlas says 2.5 green
+- `systemd-HOLD-UNTIL-2.5/` — hold until Jarvis says 2.5 green

@@ -1,14 +1,14 @@
 [Unit]
-Description=Cloudflare tunnel for Desk Atlas speak
-After=network-online.target desk-atlas-speak.service
+Description=Cloudflare tunnel for Desk Jarvis speak
+After=network-online.target desk-jarvis-speak.service
 Wants=network-online.target
-Requires=desk-atlas-speak.service
+Requires=desk-jarvis-speak.service
 
 [Service]
 Type=simple
 User=orangepi
 # HOLD: swap to named tunnel config when hostname exists:
-# ExecStart=/usr/bin/cloudflared tunnel --config /opt/desk-atlas/cloudflared/config.yml run
+# ExecStart=/usr/bin/cloudflared tunnel --config /opt/desk-jarvis/cloudflared/config.yml run
 ExecStart=/usr/bin/cloudflared tunnel --url http://127.0.0.1:8080
 Restart=on-failure
 RestartSec=5

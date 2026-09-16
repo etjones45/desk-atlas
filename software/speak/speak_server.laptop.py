@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Desk Atlas laptop server (this process, not the old Phase 0 speak_server).
+"""Desk Jarvis laptop server (this process, not the old Phase 0 speak_server).
 
   POST /voice-in   desk inbox (JSON text). Unchanged.
                    idle + no recap → TTS ack + webhook in parallel
                    recap or already busy → webhook only
   POST /ears       raw WAV / multipart file / JSON base64 → xAI STT → same as /voice-in
-  POST /speak      Atlas mouth. Point the tunnel here. Closer → idle.
+  POST /speak      Jarvis mouth. Point the tunnel here. Closer → idle.
   GET  /state      idle | busy + auth diagnostics (no secrets)
   POST /idle       force idle (test / recovery)
 
@@ -25,12 +25,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from ack_text import ack_text
-from atlas_webhook import auth_snapshot, post_voice_in
+from jarvis_webhook import auth_snapshot, post_voice_in
 from desk_state import DeskState
 from play_audio import play_bytes
 from tts_xai import TtsError, synthesize
 
-# ears STT (sibling package desk-atlas-laptop/ears/)
+# ears STT (sibling package desk-jarvis-laptop/ears/)
 _EARS_DIR = Path(__file__).resolve().parent / "ears"
 if _EARS_DIR.is_dir() and str(_EARS_DIR) not in sys.path:
     sys.path.insert(0, str(_EARS_DIR))
@@ -40,10 +40,10 @@ except ImportError:  # pragma: no cover
     SttError = RuntimeError  # type: ignore
     stt_file = None  # type: ignore
 
-HOST = os.environ.get("DESK_ATLAS_HOST", "127.0.0.1")
-PORT = int(os.environ.get("DESK_ATLAS_PORT", "8787"))
-DRY_RUN = os.environ.get("DESK_ATLAS_DRY_RUN", "").strip() in ("1", "true", "yes")
-IDLE_TIMEOUT = float(os.environ.get("DESK_ATLAS_IDLE_TIMEOUT", "180"))
+HOST = os.environ.get("DESK_JARVIS_HOST", "127.0.0.1")
+PORT = int(os.environ.get("DESK_JARVIS_PORT", "8787"))
+DRY_RUN = os.environ.get("DESK_JARVIS_DRY_RUN", "").strip() in ("1", "true", "yes")
+IDLE_TIMEOUT = float(os.environ.get("DESK_JARVIS_IDLE_TIMEOUT", "180"))
 
 STATE = DeskState(idle_timeout_sec=IDLE_TIMEOUT)
 LAST_EVENTS: list[dict] = []
@@ -93,7 +93,7 @@ def _webhook_async(text: str, thread: str, recap: str | None) -> None:
         except Exception as e:
             _log_event({"kind": "webhook", "error": str(e)})
 
-    threading.Thread(target=run, name="atlas-webhook", daemon=True).start()
+    threading.Thread(target=run, name="jarvis-webhook", daemon=True).start()
 
 
 def handle_voice_in(body: dict) -> dict:
@@ -130,7 +130,7 @@ def handle_speak(body: dict) -> dict:
     closer = bool(body.get("closer"))
     if not text:
         return {"ok": False, "error": "text required"}
-    closed = STATE.on_atlas_spoken(text, closer=closer)
+    closed = STATE.on_jarvis_spoken(text, closer=closer)
     _speak_async(text, kind="mouth")
     return {"ok": True, "closer": closed, "mode": STATE.snapshot()["mode"]}
 
@@ -261,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             snap = STATE.snapshot()
             snap.update(auth_snapshot())
             snap["listen"] = f"http://{HOST}:{PORT}"
-            snap["this_is"] = "desk-atlas speak_server"
+            snap["this_is"] = "desk-jarvis speak_server"
             with _EVENTS_LOCK:
                 snap["recent"] = list(LAST_EVENTS[-8:])
             self._json(200, snap)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""POST Desk Atlas voice-in webhook: {text, thread}.
+"""POST Desk Jarvis voice-in webhook: {text, thread}.
 
 Headers match phase0/laptop.py (Authorization Bearer + X-Sender-Key) and
-Mac atlas_webhook.py (ATLAS_SENDER_HEADER override). Never log sender keys.
+Mac jarvis_webhook.py (JARVIS_SENDER_HEADER override). Never log sender keys.
 """
 
 from __future__ import annotations
@@ -21,16 +21,16 @@ class WebhookError(RuntimeError):
 
 
 def webhook_url() -> str:
-    return (os.environ.get("ATLAS_WEBHOOK_URL") or "").strip()
+    return (os.environ.get("JARVIS_WEBHOOK_URL") or "").strip()
 
 
 def sender_key() -> str:
-    return (os.environ.get("ATLAS_SENDER_KEY") or "").strip()
+    return (os.environ.get("JARVIS_SENDER_KEY") or "").strip()
 
 
 def sender_header_name() -> str:
     return (
-        os.environ.get("ATLAS_SENDER_HEADER") or "Authorization"
+        os.environ.get("JARVIS_SENDER_HEADER") or "Authorization"
     ).strip() or "Authorization"
 
 
@@ -45,7 +45,7 @@ def post_voice_in(
     """POST {text, thread, source}. Returns (http_status, body_snippet).
 
     Sends Authorization: Bearer <key> and X-Sender-Key: <key> by default
-    (laptop.py style). If ATLAS_SENDER_HEADER is set to something other than
+    (laptop.py style). If JARVIS_SENDER_HEADER is set to something other than
     Authorization, that header is used instead of Bearer.
     """
     text = (text or "").strip()
@@ -59,9 +59,9 @@ def post_voice_in(
         else sender_key()
     ).strip()
     if not target or "PASTE_" in target:
-        raise WebhookError("ATLAS_WEBHOOK_URL is not set")
+        raise WebhookError("JARVIS_WEBHOOK_URL is not set")
     if not key:
-        raise WebhookError("ATLAS_SENDER_KEY is not set")
+        raise WebhookError("JARVIS_SENDER_KEY is not set")
 
     body = json.dumps(
         {
@@ -77,7 +77,7 @@ def post_voice_in(
         "X-Automation-Key": key,
         "Authorization": f"Bearer {key}",
     }
-    # Honoring ATLAS_SENDER_HEADER: if not Authorization, still keep Bearer +
+    # Honoring JARVIS_SENDER_HEADER: if not Authorization, still keep Bearer +
     # X-Sender-Key, and add the custom header with the raw key.
     custom = sender_header_name()
     if custom.lower() not in ("authorization", "x-sender-key", "x-automation-key"):

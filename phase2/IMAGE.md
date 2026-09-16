@@ -3,7 +3,7 @@
 **Board:** Orange Pi Zero 2W **2GB**  
 **OS:** Official **Orange Pi Debian 12 Bookworm server** (linux6.1) — **not Armbian**, not desktop XFCE, not 4GB-suffixed builds.
 
-WhisPlay path on this project expects official Orange Pi Bookworm (Atlas 2026-09-05).
+WhisPlay path on this project expects official Orange Pi Bookworm (Jarvis 2026-09-05).
 
 ## Exact file to flash (1GB/2GB boards)
 
@@ -33,7 +33,7 @@ If Google Drive is painful, this community mirror of orangepi-build Bookworm ser
 
 https://github.com/silver-alx/sbc/releases/download/next/Orangepizero2w_1.0.4_debian_bookworm_server_linux6.1.31.7z
 
-Prefer official Drive `1.0.0` when reachable; `1.0.4` is acceptable if Atlas/Ethan agree.
+Prefer official Drive `1.0.0` when reachable; `1.0.4` is acceptable if Jarvis/Ethan agree.
 
 ## After download
 

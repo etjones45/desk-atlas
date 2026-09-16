@@ -1,8 +1,8 @@
-# Desk Atlas
+# Desk Jarvis
 
 Physical **Grok Bot** screen buddy for a desk: Orange Pi Zero 2W + PiSugar Whisplay HAT.
 
-You talk → mic → STT → webhook into Atlas → Atlas replies out loud through TTS on the device.
+You talk → mic → STT → webhook into Jarvis → Jarvis replies out loud through TTS on the device.
 
 ## Hardware
 
@@ -21,8 +21,8 @@ Custom case STL/OpenSCAD: [`hardware/case/`](hardware/case/) (also mirrored in G
 ```mermaid
 flowchart LR
   Mic[Whisplay mics] --> Ears[software/ears STT]
-  Ears -->|webhook text| Atlas[Grok Bot Atlas]
-  Atlas -->|POST /speak| Mouth[speak server + TTS]
+  Ears -->|webhook text| Jarvis[Grok Bot Jarvis]
+  Jarvis -->|POST /speak| Mouth[speak server + TTS]
   Mouth --> Spk[Whisplay speaker]
 ```
 
@@ -30,9 +30,9 @@ flowchart LR
 
 1. Flash Bookworm server on the Zero 2W (see [`docs/FLASH-WHEN-BOARD-ARRIVES.md`](docs/FLASH-WHEN-BOARD-ARRIVES.md) and [`phase2/`](phase2/)).
 2. Copy `config/config.example.json` → local `config.json` (never commit secrets).
-3. Put `XAI_API_KEY`, `ATLAS_WEBHOOK_URL`, and `ATLAS_SENDER_KEY` in a local `.env` on the Pi.
+3. Put `XAI_API_KEY`, `JARVIS_WEBHOOK_URL`, and `JARVIS_SENDER_KEY` in a local `.env` on the Pi.
 4. Run ears: `python3 software/ears/ears.py --seconds 4`
-5. Expose speak via named Cloudflare tunnel (example: `https://desk.etjarvis.com/speak`). Atlas POSTs `{"text":"…","closer":true}`.
+5. Expose speak via named Cloudflare tunnel (example: `https://desk.etjarvis.com/speak`). Jarvis POSTs `{"text":"…","closer":true}`.
 
 ## Repo layout
 
@@ -56,7 +56,7 @@ Examples and docs stay key-free. Production speak URL for Ethan’s desk is a na
 
 Phase 0 ears/mouth proven. Hardware purchased. Phase 2: flash Pi, wire STT + speak on-device, keep secrets local.
 
-Owners (personal ops): Hermes (software), Daedalus (hardware), Atlas (PM / webhook), Octavian (this GitHub repo).
+Owners (personal ops): Hermes (software), Daedalus (hardware), Jarvis (PM / webhook), Octavian (this GitHub repo).
 
 ## License
 

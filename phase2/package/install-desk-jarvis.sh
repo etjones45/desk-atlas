@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Install Desk Atlas speak stack onto the Orange Pi (run on the board after WhisPlay verifies).
+# Install Desk Jarvis speak stack onto the Orange Pi (run on the board after WhisPlay verifies).
 # Does NOT enable systemd units until Phase 2.5 is green (see ../systemd-HOLD-UNTIL-2.5/).
 set -euo pipefail
-DEST="${DEST:-/opt/desk-atlas}"
+DEST="${DEST:-/opt/desk-jarvis}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 sudo mkdir -p "$DEST" "$DEST/dropbox"
@@ -22,4 +22,4 @@ if [[ ! -f "$DEST/speak.secret" ]]; then
   echo "Generated new speak.secret at $DEST/speak.secret"
 fi
 echo "Installed to $DEST. Systemd units are HOLD until Phase 2.5 green."
-echo "Manual test: cd $DEST && set -a && source ./env && set +a && ATLAS_PLAY=1 python3 speak_server.py"
+echo "Manual test: cd $DEST && set -a && source ./env && set +a && JARVIS_PLAY=1 python3 speak_server.py"

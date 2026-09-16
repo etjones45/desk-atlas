@@ -1,6 +1,6 @@
 // =============================================================================
-// Desk Atlas case — Orange Pi Zero 2W (bottom) + Whisplay HAT (top)
-// Ethan’s desk Atlas. Custom OPi ports (NOT RPi Micro-USB).
+// Desk Jarvis case — Orange Pi Zero 2W (bottom) + Whisplay HAT (top)
+// Ethan’s desk Jarvis. Custom OPi ports (NOT RPi Micro-USB).
 // OpenSCAD 2021.01+  |  mm
 // =============================================================================
 // PCB-local coords (origin = microSD corner of PCB footprint):

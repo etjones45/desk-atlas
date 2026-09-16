@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record N seconds of mic audio to WAV for Desk Atlas ears.
+"""Record N seconds of mic audio to WAV for Desk Jarvis ears.
 
 Prefer arecord (Orange Pi / WhisPlay). Fall back to ffmpeg avfoundation (Mac)
 or alsa (Linux).
@@ -39,8 +39,8 @@ def record_wav(seconds: float, out: Path) -> Path:
 
 
 def _arecord(seconds: float, out: Path) -> None:
-    # WhisPlay / ALSA default device; override with ATLAS_RECORD_DEVICE
-    device = os.environ.get("ATLAS_RECORD_DEVICE", "default")
+    # WhisPlay / ALSA default device; override with JARVIS_RECORD_DEVICE
+    device = os.environ.get("JARVIS_RECORD_DEVICE", "default")
     cmd = [
         "arecord",
         "-D",
@@ -63,7 +63,7 @@ def _arecord(seconds: float, out: Path) -> None:
 
 
 def _ffmpeg(seconds: float, out: Path) -> None:
-    device = os.environ.get("ATLAS_RECORD_DEVICE")
+    device = os.environ.get("JARVIS_RECORD_DEVICE")
     # Detect platform input: Mac avfoundation vs Linux alsa
     if sys.platform == "darwin":
         # default mic index ":0" or env override like "none:0" / ":1"

@@ -1,5 +1,5 @@
 {
-  "project": "desk-atlas-whisplay-case",
+  "project": "desk-jarvis-whisplay-case",
   "board": "Orange Pi Zero 2W + Whisplay HAT",
   "units": "mm",
   "coordinate_system": {
@@ -35,7 +35,7 @@
           26.5
         ]
       ],
-      "note": "Pi Zero\u2013compatible pattern; M2.5 screws"
+      "note": "Pi Zero–compatible pattern; M2.5 screws"
     }
   },
   "whisplay": {
@@ -172,8 +172,8 @@
     "screen_end_posts": "braced to walls because screen window removes slab over X=61.5 holes"
   },
   "references_not_shipped": [
-    "PiSugar pisugar3-whisplay-chatbot-fdm (RPi+battery \u2014 HAT face ideas only)",
-    "Printables Ground Zero Whisplay case (RPi cutouts \u2014 HAT face ideas only)"
+    "PiSugar pisugar3-whisplay-chatbot-fdm (RPi+battery — HAT face ideas only)",
+    "Printables Ground Zero Whisplay case (RPi cutouts — HAT face ideas only)"
   ],
   "validation": {
     "openscad": "2021.01",
