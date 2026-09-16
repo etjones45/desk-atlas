@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""xAI speech-to-text helper for Desk Atlas ears.
+"""xAI speech-to-text helper for Desk Jarvis ears.
 
 POST https://api.x.ai/v1/stt — same contract as phase0/laptop.py stt_file.
 Never log or print the API key.
@@ -58,7 +58,7 @@ def _stt_requests(wav_path: Path, api_key: str) -> str | None:
             r = requests.post(
                 STT_URL,
                 headers={"Authorization": f"Bearer {api_key}"},
-                data=[("format", "true"), ("language", "en"), ("keyterm", "Atlas")],
+                data=[("format", "true"), ("language", "en"), ("keyterm", "Jarvis")],
                 files={"file": (wav_path.name, f, "audio/wav")},
                 timeout=120,
             )
@@ -85,7 +85,7 @@ def _stt_curl(wav_path: Path, api_key: str) -> str:
         "-F",
         "language=en",
         "-F",
-        "keyterm=Atlas",
+        "keyterm=Jarvis",
         "-F",
         f"file=@{wav_path}",
     ]
