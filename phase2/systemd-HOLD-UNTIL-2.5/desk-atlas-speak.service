@@ -1,0 +1,18 @@
+[Unit]
+Description=Desk Atlas speak server (xAI TTS mouth)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orangepi
+WorkingDirectory=/opt/desk-atlas
+EnvironmentFile=-/opt/desk-atlas/env
+Environment=ATLAS_SPEAK_PORT=8080
+Environment=ATLAS_PLAY=1
+ExecStart=/usr/bin/python3 /opt/desk-atlas/speak_server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
