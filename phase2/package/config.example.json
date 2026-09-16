@@ -1,0 +1,17 @@
+{
+  "thread": "desk-work",
+  "speak_url": null,
+  "voice_id": "eve",
+  "hardware": {
+    "board": "Orange Pi Zero 2W 2GB",
+    "hat": "PiSugar WhisPlay",
+    "header": "hammer-in",
+    "os": "Orange Pi Debian Bookworm server linux6.1"
+  },
+  "owners": {
+    "software": "Hermes",
+    "cart": "Daedalus",
+    "pm": "Atlas"
+  },
+  "phase": 2
+}
