@@ -67,9 +67,11 @@ Screen-end posts (under the glass zone) are **braced to the walls** so they stay
 
 ## Regenerating STLs
 
+From a checkout of this repo:
+
 ```bash
 sudo apt-get install -y openscad   # if needed
-cd /workspace/desk-jarvis/case
+cd hardware/case
 openscad -o jarvis-whisplay-case-bottom.stl --export-format binstl -D 'part="bottom"' jarvis-whisplay-case.scad
 openscad -o jarvis-whisplay-case-top.stl    --export-format binstl -D 'part="top"'    jarvis-whisplay-case.scad
 openscad -o jarvis-whisplay-case.stl        --export-format binstl -D 'part="both"'   jarvis-whisplay-case.scad
