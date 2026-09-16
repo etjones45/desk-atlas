@@ -39,8 +39,8 @@ python3 phase0/laptop.py --record 4          # needs XAI_API_KEY
 python3 phase0/laptop.py --speak-test "…"    # needs speak_url + server key
 ```
 
-Wake sketch (board later): `docs/wake_sketch.md`.  
-Tunnel / flash / blockers: `docs/TUNNEL.md`, `docs/FLASH-WHEN-BOARD-ARRIVES.md`, `docs/BLOCKERS.md`.
+Flash / blockers: [`docs/FLASH-WHEN-BOARD-ARRIVES.md`](FLASH-WHEN-BOARD-ARRIVES.md), [`docs/BLOCKERS.md`](BLOCKERS.md).  
+Wake-word sketch for the board is still TBD (not checked in yet).
 
 ## Go / no-go
 
