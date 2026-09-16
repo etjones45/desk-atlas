@@ -1,4 +1,4 @@
-# Desk Atlas — Phase 2 software kit
+# Desk Jarvis — Phase 2 software kit
 
 **Status:** ready for hardware landing. Hermes owns artifacts here. Ethan owns flash / physical / first Wi-Fi / WhisPlay install run / key-on-Pi.
 
@@ -16,7 +16,7 @@
 
 **Hermes:** image pin, docs, speak package, tunnel/systemd templates, key process notes.  
 **Ethan:** flash SD, header/HAT, first power, home Wi-Fi, run install, verify, put xAI key on Pi, guest Wi-Fi last.  
-**Atlas:** PM, 2.5 green gate for systemd enable, mouth smoke after tunnel. No Hermes→Ethan ping until Atlas says.
+**Jarvis:** PM, 2.5 green gate for systemd enable, mouth smoke after tunnel. No Hermes→Ethan ping until Jarvis says.
 
 ## Install lock (2.5)
 
