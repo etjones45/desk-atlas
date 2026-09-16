@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desk Atlas speak server — Phase 0 mouth endpoint (stdlib only)."""
+"""Desk Jarvis speak server — Phase 0 mouth endpoint (stdlib only)."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ LOG_PATH = BASE / "speak.log"
 MP3_PATH = BASE / "last_speak.mp3"
 MAX_TEXT = 800
 TTS_URL = "https://api.x.ai/v1/tts"
-PORT = int(os.environ.get("ATLAS_SPEAK_PORT", "8080"))
-VOICE = os.environ.get("ATLAS_VOICE", "eve")
-PLAY = os.environ.get("ATLAS_PLAY", "1") != "0"
+PORT = int(os.environ.get("JARVIS_SPEAK_PORT", "8080"))
+VOICE = os.environ.get("JARVIS_VOICE", "eve")
+PLAY = os.environ.get("JARVIS_PLAY", "1") != "0"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,7 +31,7 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
-log = logging.getLogger("atlas-speak")
+log = logging.getLogger("jarvis-speak")
 
 
 def load_secret() -> str | None:
@@ -70,7 +70,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(500, {"ok": False, "error": "speak.secret missing"})
             return
 
-        got = self.headers.get("X-Atlas-Speak-Secret", "")
+        got = self.headers.get("X-Jarvis-Speak-Secret", "")
         if got != secret:
             log.warning("speak auth failed from %s", self.address_string())
             self._send_json(401, {"ok": False, "error": "unauthorized"})
