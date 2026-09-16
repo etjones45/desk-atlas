@@ -1,6 +1,6 @@
-# Desk Atlas — Orange Pi Zero 2W + Whisplay HAT case
+# Desk Jarvis — Orange Pi Zero 2W + Whisplay HAT case
 
-Printable two-piece clamshell for **Ethan’s desk Atlas** stack:
+Printable two-piece clamshell for **Ethan’s desk Jarvis** stack:
 
 - Bottom: Orange Pi Zero 2W  
 - Top: PiSugar Whisplay HAT (1.69″ LCD, dual mics, speaker, RGB LED, click button)  
@@ -12,10 +12,10 @@ This is a **custom Orange Pi** case (Mini-HDMI + 2× USB-C + microSD). It is **n
 
 | File | Description |
 |------|-------------|
-| `atlas-whisplay-case.scad` | OpenSCAD source (edit dims here) |
-| `atlas-whisplay-case-bottom.stl` | Bottom shell, print as-oriented |
-| `atlas-whisplay-case-top.stl` | Top lid, already flipped (outer face on bed) |
-| `atlas-whisplay-case.stl` | Both parts laid flat on one plate |
+| `jarvis-whisplay-case.scad` | OpenSCAD source (edit dims here) |
+| `jarvis-whisplay-case-bottom.stl` | Bottom shell, print as-oriented |
+| `jarvis-whisplay-case-top.stl` | Top lid, already flipped (outer face on bed) |
+| `jarvis-whisplay-case.stl` | Both parts laid flat on one plate |
 | `dims.json` | Numeric assumptions used for this revision |
 | `README.md` | This file |
 
@@ -63,30 +63,30 @@ Screen-end posts (under the glass zone) are **braced to the walls** so they stay
 1. **Stack height:** photos suggest ~16–20 mm total. Assumed header gap ≈11 mm + display raise ≈2.5 mm. Cavity is **22 mm** from standoff tops for clearance so the lid does not crush the glass.  
 2. **Port centers:** Mini-HDMI ≈X=12.5, USB-C ≈X=40.5 / 53.5 on the Y=0 edge — approximated from Ethan’s photos and Zero-form-factor layout, **not** an official OPi mechanical drawing. Cutouts are oversized; measure your board and edit the SCAD if a plug binds.  
 3. **Whisplay face holes:** mic / speaker / button / LED positions are approximate (photos + typical HAT face). PiSugar’s FDM chatbot case and Printables “Ground Zero” were used only as HAT-face references — **their RPi port cutouts were not used**.  
-4. **No published OPi Zero 2W + Whisplay STL** was found; this design is original for Atlas.
+4. **No published OPi Zero 2W + Whisplay STL** was found; this design is original for Jarvis.
 
 ## Regenerating STLs
 
 ```bash
 sudo apt-get install -y openscad   # if needed
-cd /workspace/desk-atlas/case
-openscad -o atlas-whisplay-case-bottom.stl --export-format binstl -D 'part="bottom"' atlas-whisplay-case.scad
-openscad -o atlas-whisplay-case-top.stl    --export-format binstl -D 'part="top"'    atlas-whisplay-case.scad
-openscad -o atlas-whisplay-case.stl        --export-format binstl -D 'part="both"'   atlas-whisplay-case.scad
+cd /workspace/desk-jarvis/case
+openscad -o jarvis-whisplay-case-bottom.stl --export-format binstl -D 'part="bottom"' jarvis-whisplay-case.scad
+openscad -o jarvis-whisplay-case-top.stl    --export-format binstl -D 'part="top"'    jarvis-whisplay-case.scad
+openscad -o jarvis-whisplay-case.stl        --export-format binstl -D 'part="both"'   jarvis-whisplay-case.scad
 ```
 
 Preview assembly in OpenSCAD with `part="assembly"`.
 
 ## Revision
 
-- 2026-09-14 — Initial OpenSCAD clamshell for Atlas (OPi Zero 2W ports + Whisplay face).
+- 2026-09-14 — Initial OpenSCAD clamshell for Jarvis (OPi Zero 2W ports + Whisplay face).
 
 
 ## Printable STLs
 
 Binary `.stl` files are large for the GitHub text API. Source of truth for prints:
 
-- Google Drive folder: [Desk Atlas case](https://drive.google.com/drive/folders/1oPI9PROn44mxh8NkbhoVGv0CYGK3a-l1)
+- Google Drive folder: [Desk Jarvis case](https://drive.google.com/drive/folders/1oPI9PROn44mxh8NkbhoVGv0CYGK3a-l1)
 - In-repo: OpenSCAD source + `dims.json` (edit dims here, regenerate STLs)
 
-Files on Drive / local seed: `atlas-whisplay-case-bottom.stl`, `atlas-whisplay-case-top.stl`, `atlas-whisplay-case.stl` (combined plate).
+Files on Drive / local seed: `jarvis-whisplay-case-bottom.stl`, `jarvis-whisplay-case-top.stl`, `jarvis-whisplay-case.stl` (combined plate).
