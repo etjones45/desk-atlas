@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desk Atlas Phase-0 laptop script (Ethan).
+"""Desk Jarvis Phase-0 laptop script (Ethan).
 
 Prove ears without hardware:
   - type text → webhook (or dropbox fallback)
@@ -95,7 +95,7 @@ def send_ears(text: str, webhook_url: str | None, sender_key: str | None) -> Non
 
     path = write_dropbox(text, note="webhook URL/key not set")
     print(f"no webhook configured — wrote dropbox {path}")
-    print("For live ears: copy URL+key from Desk Atlas voice-in panel and curl from your laptop (see curl-ears.example.sh). Do not paste keys into chat.")
+    print("For live ears: copy URL+key from Desk Jarvis voice-in panel and curl from your laptop (see curl-ears.example.sh). Do not paste keys into chat.")
 
 
 def stt_file(wav_path: Path, api_key: str) -> str:
@@ -107,7 +107,7 @@ def stt_file(wav_path: Path, api_key: str) -> str:
             r = requests.post(
                 "https://api.x.ai/v1/stt",
                 headers={"Authorization": f"Bearer {api_key}"},
-                data=[("format", "true"), ("language", "en"), ("keyterm", "Atlas")],
+                data=[("format", "true"), ("language", "en"), ("keyterm", "Jarvis")],
                 files={"file": (wav_path.name, f, "audio/wav")},
                 timeout=120,
             )
@@ -129,7 +129,7 @@ def stt_file(wav_path: Path, api_key: str) -> str:
         "-F",
         "language=en",
         "-F",
-        "keyterm=Atlas",
+        "keyterm=Jarvis",
         "-F",
         f"file=@{wav_path}",
     ]
@@ -139,8 +139,8 @@ def stt_file(wav_path: Path, api_key: str) -> str:
 
 def record_wav(seconds: float, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
-    # ffmpeg from default mic; Ethan can override with ATLAS_RECORD_DEVICE
-    device = os.environ.get("ATLAS_RECORD_DEVICE", "default")
+    # ffmpeg from default mic; Ethan can override with JARVIS_RECORD_DEVICE
+    device = os.environ.get("JARVIS_RECORD_DEVICE", "default")
     cmd = [
         "ffmpeg",
         "-y",
@@ -169,7 +169,7 @@ def ping_speak(speak_url: str, secret: str, text: str) -> None:
         method="POST",
         headers={
             "Content-Type": "application/json",
-            "X-Atlas-Speak-Secret": secret,
+            "X-Jarvis-Speak-Secret": secret,
         },
     )
     with urllib.request.urlopen(req, timeout=90) as resp:
@@ -178,21 +178,21 @@ def ping_speak(speak_url: str, secret: str, text: str) -> None:
 
 def main() -> None:
     cfg = load_config()
-    p = argparse.ArgumentParser(description="Desk Atlas Phase-0 laptop bridge")
+    p = argparse.ArgumentParser(description="Desk Jarvis Phase-0 laptop bridge")
     p.add_argument("--text", help="Send this text as ears (skip mic)")
     p.add_argument("--record", type=float, metavar="SEC", help="Record N seconds then STT")
     p.add_argument("--wav", type=Path, help="Transcribe existing WAV/MP3 then send")
     p.add_argument("--speak-test", metavar="TEXT", help="POST text to mouth /speak")
-    p.add_argument("--webhook-url", default=os.environ.get("ATLAS_WEBHOOK_URL") or cfg.get("webhook_url"))
-    p.add_argument("--sender-key", default=os.environ.get("ATLAS_SENDER_KEY") or cfg.get("sender_key"))
-    p.add_argument("--speak-url", default=os.environ.get("ATLAS_SPEAK_URL") or cfg.get("speak_url"))
+    p.add_argument("--webhook-url", default=os.environ.get("JARVIS_WEBHOOK_URL") or cfg.get("webhook_url"))
+    p.add_argument("--sender-key", default=os.environ.get("JARVIS_SENDER_KEY") or cfg.get("sender_key"))
+    p.add_argument("--speak-url", default=os.environ.get("JARVIS_SPEAK_URL") or cfg.get("speak_url"))
     args = p.parse_args()
 
     if args.speak_test:
         secret = (BASE / "speak.secret").read_text(encoding="utf-8").strip()
         speak_url = args.speak_url
         if not speak_url:
-            print("set speak_url in config.json or ATLAS_SPEAK_URL", file=sys.stderr)
+            print("set speak_url in config.json or JARVIS_SPEAK_URL", file=sys.stderr)
             sys.exit(2)
         ping_speak(str(speak_url), secret, args.speak_test)
         return
