@@ -32,6 +32,7 @@ SYNC_MAP: list[tuple[str, str]] = [
     ("software/speak/play_audio.py", "play_audio.py"),
     ("software/speak/desk_update.py", "desk_update.py"),
     ("software/speak/post_speak_once.py", "post_speak_once.py"),
+    ("software/speak/face.py", "face.py"),  # WhisPlay anim — required for OTA face upgrades
 ]
 
 EARS_FLAT_CANDIDATES = [
