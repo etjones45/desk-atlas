@@ -55,7 +55,6 @@ _THINK_PALETTE = (
     (190, 80, 255),
     (40, 140, 255),
 )
-
 BG = (18, 18, 20)
 
 # Studio key light, upper-left, matching the reference frames.
