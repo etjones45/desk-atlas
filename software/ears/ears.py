@@ -14,8 +14,8 @@ Wake:
   Else STT keyphrase interim: energy gate → short STT → fuzzy match
   DESK_WAKE_PHRASE (default "hey grok").
 
-On wake → face.set_state("listen") (import face or POST :8787/face),
-then record → STT → webhook.
+On wake → POST DESK_FACE_URL (/face) state=listen (HTTP only; speak_server owns the screen),
+then record → STT → webhook; on webhook 200 → state=think.
 
 JSON logs: {"kind":"listen","wake":"hey grok",...}
 Never prints secrets.
@@ -95,28 +95,23 @@ def env_flags() -> dict:
     }
 
 
-def set_face_listen() -> None:
-    try:
-        import face as desk_face  # type: ignore
-
-        fn = getattr(desk_face, "set_state", None)
-        if callable(fn):
-            fn("listen")
-            log({"kind": "face", "state": "listen", "via": "import"})
-            return
-    except Exception as e:
-        log({"kind": "face", "warn": f"import:{e}"})
+def set_face(state: str) -> None:
+    """Notify speak_server face over HTTP only (screen lives in that process)."""
     try:
         req = urllib.request.Request(
             FACE_URL,
-            data=json.dumps({"state": "listen"}).encode("utf-8"),
+            data=json.dumps({"state": state}).encode("utf-8"),
             method="POST",
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=3) as resp:
-            log({"kind": "face", "state": "listen", "via": "http", "status": int(resp.status)})
+            log({"kind": "face", "state": state, "via": "http", "status": int(resp.status)})
     except Exception as e:
         log({"kind": "face", "error": str(e)})
+
+
+def set_face_listen() -> None:
+    set_face("listen")
 
 
 def normalize(text: str) -> str:
@@ -200,6 +195,8 @@ def post_utterance(text: str) -> None:
     try:
         code, body = post_voice_in(text, thread="desk-work", source="ears-listen")
         log({"kind": "listen", "webhook": code, "body": (body or "")[:200]})
+        if 200 <= int(code) < 300:
+            set_face("think")
     except WebhookError as e:
         path = write_dropbox(text, note=str(e), source="ears-listen")
         log({"kind": "listen", "webhook_error": str(e), "dropbox": str(path)})
