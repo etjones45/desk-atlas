@@ -154,18 +154,151 @@ def resolve_oww_model() -> Path | None:
     return None
 
 
-def record_utterance(seconds: float) -> str:
+def _record_device() -> str:
+    return (
+        os.environ.get("ATLAS_RECORD_DEVICE")
+        or os.environ.get("JARVIS_RECORD_DEVICE")
+        or "default"
+    )
+
+
+def record_until_silence(
+    *,
+    max_sec: float | None = None,
+    min_sec: float | None = None,
+    silence_sec: float | None = None,
+    energy: float | None = None,
+) -> Path:
+    """Record mono 16 kHz WAV until end-of-speech silence (or max_sec).
+
+    Starts immediately after wake. Waits for speech (or min_sec), then stops
+    after `silence_sec` of quiet so long commands are not cut at a fixed length.
+    """
+    import wave
+
+    rate = 16000
+    chunk_ms = 100
+    chunk = rate * chunk_ms // 1000
+    max_sec = float(
+        max_sec
+        if max_sec is not None
+        else os.environ.get("DESK_UTTERANCE_MAX_SEC", "25")
+    )
+    min_sec = float(
+        min_sec
+        if min_sec is not None
+        else os.environ.get("DESK_UTTERANCE_MIN_SEC", "1.2")
+    )
+    silence_sec = float(
+        silence_sec
+        if silence_sec is not None
+        else os.environ.get("DESK_UTTERANCE_SILENCE_SEC", "1.1")
+    )
+    energy = float(
+        energy
+        if energy is not None
+        else os.environ.get("DESK_UTTERANCE_ENERGY", os.environ.get("DESK_WAKE_ENERGY", "350"))
+    )
+    silence_chunks = max(1, int(round(silence_sec * 1000 / chunk_ms)))
+    max_chunks = max(1, int(round(max_sec * 1000 / chunk_ms)))
+    min_chunks = max(1, int(round(min_sec * 1000 / chunk_ms)))
+
     tmp = HERE / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     wav = tmp / f"utt-{int(time.time())}.wav"
+    device = _record_device()
+    cmd = [
+        "arecord",
+        "-D",
+        device,
+        "-f",
+        "S16_LE",
+        "-r",
+        str(rate),
+        "-c",
+        "1",
+        "-t",
+        "raw",
+        "-q",
+    ]
+    log(
+        {
+            "kind": "listen",
+            "recording": "until_silence",
+            "max_sec": max_sec,
+            "min_sec": min_sec,
+            "silence_sec": silence_sec,
+            "energy": energy,
+            "device": device,
+        }
+    )
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    assert proc.stdout is not None
+    pcm = bytearray()
+    heard = False
+    quiet = 0
     try:
-        record_wav(seconds, wav)
+        for i in range(max_chunks):
+            raw = proc.stdout.read(chunk * 2)
+            if not raw:
+                break
+            pcm.extend(raw)
+            rms = rms_s16le(raw)
+            if rms >= energy:
+                heard = True
+                quiet = 0
+            elif heard:
+                quiet += 1
+                if quiet >= silence_chunks and i + 1 >= min_chunks:
+                    break
+            elif i + 1 >= min_chunks and quiet == 0 and not heard:
+                # still waiting for speech; keep going until max
+                pass
+        if len(pcm) < rate:  # <0.5s
+            raise RecordError("utterance too short")
+        with wave.open(str(wav), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(bytes(pcm))
+        log(
+            {
+                "kind": "listen",
+                "recording_done": True,
+                "sec": round(len(pcm) / (rate * 2), 2),
+                "heard": heard,
+            }
+        )
+        return wav
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
+
+
+def record_utterance(seconds: float) -> str:
+    """STT a post-wake utterance. Uses silence-end by default; fixed length if DESK_UTTERANCE_FIXED=1."""
+    tmp = HERE / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    wav: Path | None = None
+    try:
+        fixed = (os.environ.get("DESK_UTTERANCE_FIXED") or "").strip() in ("1", "true", "yes")
+        if fixed:
+            wav = tmp / f"utt-{int(time.time())}.wav"
+            record_wav(seconds, wav)
+        else:
+            # Prefer silence-end; `seconds` becomes the max cap when env unset
+            max_sec = float(os.environ.get("DESK_UTTERANCE_MAX_SEC", str(max(seconds, 20.0))))
+            wav = record_until_silence(max_sec=max_sec)
         return stt_file(wav)
     finally:
-        try:
-            wav.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if wav is not None:
+            try:
+                wav.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def rms_s16le(pcm: bytes) -> float:
@@ -443,7 +576,7 @@ def run_oneshot(args: argparse.Namespace) -> int:
 
 def run_listen(args: argparse.Namespace) -> int:
     model = resolve_oww_model()
-    utterance_sec = float(args.seconds)
+    utterance_sec = float(os.environ.get("DESK_UTTERANCE_MAX_SEC") or args.seconds or 25)
     try:
         if model is not None:
             try:
@@ -470,7 +603,7 @@ def main() -> None:
         type=float,
         default=4.0,
         metavar="N",
-        help="record N seconds (CLI default 4; listen utterance length)",
+        help="CLI fixed record seconds; listen mode uses silence-end (max via DESK_UTTERANCE_MAX_SEC, default 25)",
     )
     p.add_argument("--wav", type=Path, help="transcribe existing WAV/MP3 then webhook")
     p.add_argument("--text", help="send typed text (skip mic/STT) for webhook test")
