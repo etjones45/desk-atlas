@@ -188,6 +188,15 @@ def sync_mapped() -> dict[str, Any]:
     else:
         skipped.append("ears.py")
 
+    # Always sync face.py (critical UI; also guards stale in-memory SYNC_MAP)
+    face_src = UPSTREAM / "software" / "speak" / "face.py"
+    if face_src.is_file():
+        copied.append(_copy_file(face_src, LIVE / "face.py"))
+    elif (LIVE / "face.py").is_file():
+        skipped.append("software/speak/face.py (missing upstream; kept live)")
+    else:
+        skipped.append("software/speak/face.py (missing)")
+
     # Never touch .env / venv
     env_ok = (LIVE / ".env").is_file()
     return {
@@ -199,38 +208,56 @@ def sync_mapped() -> dict[str, Any]:
 
 
 def restart_services() -> dict[str, Any]:
+    """Bounce desk units. Prefer systemctl; fall back to pkill (Restart=always)."""
+    import time
+
     units = ["desk-atlas.service", "desk-atlas-ears.service"]
-    # Prefer passwordless sudo systemctl
     r = _run(["sudo", "-n", "systemctl", "restart", *units], timeout=60)
     if r.get("ok"):
         r["method"] = "sudo-systemctl"
         return r
-    # Fallback: user units
     r2 = _run(["systemctl", "--user", "restart", *units], timeout=60)
     if r2.get("ok"):
         r2["method"] = "systemctl-user"
         return r2
+
+    # No sudoers: kill processes; systemd Restart=always brings them back.
+    _run(["pkill", "-f", "/home/orangepi/desk-atlas/speak_server.py"], timeout=15)
+    _run(["pkill", "-f", "speak_server.py"], timeout=15)
+    _run(["pkill", "-f", "/home/orangepi/desk-atlas/ears.py"], timeout=15)
+    time.sleep(3.0)
+    speak_up = _run(["pgrep", "-f", "speak_server.py"], timeout=10)
+    ears_up = _run(["pgrep", "-f", "ears.py --listen"], timeout=10)
+    ok = bool(speak_up.get("ok"))  # pgrep ok => found
     return {
-        "ok": False,
-        "error": "restart failed (sudo -n and systemctl --user)",
+        "ok": ok,
+        "method": "pkill-Restart=always",
+        "speak_running": bool(speak_up.get("ok")),
+        "ears_running": bool(ears_up.get("ok")),
         "sudo": {k: r.get(k) for k in ("code", "stderr") if k in r},
         "user": {k: r2.get(k) for k in ("code", "stderr") if k in r2},
-        "hint": "need NOPASSWD sudoers for those two units",
+        "hint": None if ok else "pkill ran but speak_server did not return; check systemd units",
     }
 
 
 def schedule_restart(delay_sec: float = 1.25) -> dict[str, Any]:
-    """Restart after the HTTP response can flush (restart kills speak_server)."""
+    """Restart after HTTP response can flush. Writes result to last-restart.json."""
+    import json
     import threading
     import time
 
-    holder: dict[str, Any] = {"ok": True, "method": "scheduled"}
+    status_path = LIVE / "last-restart.json"
+    holder: dict[str, Any] = {"ok": None, "method": "scheduled", "pending": True}
 
     def _later() -> None:
         time.sleep(delay_sec)
         r = restart_services()
         holder.clear()
         holder.update(r)
+        try:
+            status_path.write_text(json.dumps(r, indent=2) + "\n", encoding="utf-8")
+        except OSError:
+            pass
 
     threading.Thread(target=_later, name="desk-atlas-restart", daemon=True).start()
     return holder
@@ -250,7 +277,22 @@ def run_update() -> dict[str, Any]:
             "restarted": False,
             "spoke": False,
         }
-    synced = sync_mapped()
+    # Land newest desk_update.py before sync so SYNC_MAP/face rules apply even if
+    # this process still has a stale import — also always-copy face inside sync_mapped.
+    du_src = UPSTREAM / "software" / "speak" / "desk_update.py"
+    if du_src.is_file():
+        try:
+            _copy_file(du_src, LIVE / "desk_update.py")
+        except OSError:
+            pass
+    try:
+        import importlib
+        import desk_update as _du
+
+        importlib.reload(_du)
+        synced = _du.sync_mapped()
+    except Exception:
+        synced = sync_mapped()
     if not synced.get("ok"):
         return {
             "ok": False,
@@ -276,9 +318,12 @@ def run_update() -> dict[str, Any]:
             "skipped": synced.get("skipped"),
             "env_present": synced.get("env_present"),
         },
-        "restarted": True,
+        "restarted": "scheduled",
         "spoke": spoke,
-        "restart": {"method": "scheduled-after-response", "note": "units restart ~1s after response"},
+        "restart": {
+            "method": "scheduled-after-response",
+            "note": "units bounce ~1.25s after response; see LIVE/last-restart.json",
+        },
         "error": None if spoke else "spoke failed (restart still scheduled)",
     }
 
