@@ -28,6 +28,7 @@ from pathlib import Path
 
 from ack_text import ack_text
 from atlas_webhook import auth_snapshot, post_voice_in
+from local_intents import try_local
 from desk_state import DeskState
 from play_audio import play_bytes
 from tts_xai import TtsError, synthesize
@@ -162,6 +163,22 @@ def handle_voice_in(body: dict) -> dict:
         return {"ok": False, "error": "text required"}
 
     _face("listen")
+
+    # On-device: time/date etc. — answer + idle, no webhook round-trip.
+    local = try_local(text)
+    if local:
+        _speak_async(local, kind="local")
+        snap = STATE.snapshot()
+        return {
+            "ok": True,
+            "local": True,
+            "acked": False,
+            "ack": None,
+            "answer": local,
+            "mode": snap["mode"],
+            "thread": thread,
+        }
+
     ack = None
     if STATE.should_ack(recap):
         ack = ack_text(text)
@@ -176,6 +193,7 @@ def handle_voice_in(body: dict) -> dict:
     snap = STATE.snapshot()
     return {
         "ok": True,
+        "local": False,
         "acked": bool(ack),
         "ack": ack,
         "mode": snap["mode"],
