@@ -60,7 +60,7 @@ Examples and docs stay key-free. Production speak URL for Ethan’s desk is a na
 
 ## Status
 
-Phase 0 ears/mouth proven. Hardware purchased. Phase 2: flash Pi, wire STT + speak on-device, keep secrets local.
+Phase 0 ears/mouth proven. Face standard is the object-space clay sphere in `software/speak/face.py` (OTA name `~/desk-atlas/face.py`). Keep secrets local.
 
 Owners (personal ops): Hermes (software), Daedalus (hardware), Jarvis (PM / webhook), Octavian (this GitHub repo).
 
