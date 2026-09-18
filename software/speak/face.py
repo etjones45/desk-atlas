@@ -1,45 +1,75 @@
 #!/usr/bin/env python3
-"""Grok-style matte sphere face for the Whisplay 240x280 panel.
+"""Desk Atlas face — Pi live name is face.py (~/desk-atlas/face.py).
 
-The character is a single clay-blue ball that actually *rolls*: the eyes are
-cut into the sphere in object space. Moods change color, lid shapes and motion.
+Public API used by speak_server:
+    face.start(); face.set_state("talk"); face.snapshot()
 
-Public API is unchanged, so speak_server keeps working:
-    face.start(); face.set_state(\"talk\"); face.snapshot()
-
-Laptop preview:
-    DESK_ATLAS_FACE_PREVIEW=/tmp/desk-atlas-face.png python3 face.py
-    python3 face.py --stills
-    python3 face.py --clip idle 6
-Pi: same file at ~/desk-atlas/face.py. Face failure never kills speech.
-No API keys in this module.
+The full object-space clay-sphere rig is the animation-chat standard
+(artifacts/desk-atlas/face.py). This module stays import-safe so an OTA
+pull cannot kill speech if the large body has not landed yet.
+No API keys live here. TTS / webhook / OTA keys stay in ~/desk-atlas/.env.
 """
 from __future__ import annotations
-import math, os, random, sys, threading, time
-try:
-    import numpy as np
-    _HAVE_NUMPY = True
-except Exception:
-    np = None
-    _HAVE_NUMPY = False
+
+import os
+import threading
+
 WIDTH = int(os.environ.get("DESK_ATLAS_FACE_W", "240"))
 HEIGHT = int(os.environ.get("DESK_ATLAS_FACE_H", "280"))
 FPS = float(os.environ.get("DESK_ATLAS_FACE_FPS", "24"))
-DONE_HOLD_SEC = float(os.environ.get("DESK_ATLAS_FACE_DONE_HOLD", "2.5"))
-DITHER = os.environ.get("DESK_ATLAS_FACE_DITHER", "1").strip() not in ("0", "off", "no")
-MOODS = {
-    "idle":     dict(color=(57, 100, 208), led=(20, 70, 200)),
-    "listen":   dict(color=(64, 122, 232), led=(40, 110, 255)),
-    "think":    dict(color=(92, 104, 214), led=(120, 130, 235)),
-    "talk":     dict(color=(58, 106, 220), led=(20, 80, 220)),
-    "done":     dict(color=(44, 178, 112), led=(20, 180, 70)),
-    "happy":    dict(color=(56, 164, 236), led=(40, 170, 255)),
-    "error":    dict(color=(206, 62, 58),  led=(220, 20, 20)),
-    "sad":      dict(color=(62, 96, 186),  led=(24, 46, 140)),
-    "sleep":    dict(color=(48, 78, 168),  led=(10, 24, 80)),
-    "surprise": dict(color=(74, 136, 244), led=(80, 150, 255)),
+
+STATES = (
+    "idle", "listen", "think", "talk", "done",
+    "happy", "error", "sad", "sleep", "surprise",
+)
+_ALIAS = {
+    "speak": "talk", "speaking": "talk", "ok": "done", "success": "done",
+    "fail": "error", "thinking": "think", "listening": "listen",
+    "sleepy": "sleep", "wake": "surprise", "smile": "happy",
 }
-STATES = tuple(MOODS.keys())
-_ALIAS = {"speak": "talk", "speaking": "talk", "ok": "done", "success": "done", "fail": "error", "thinking": "think", "listening": "listen", "sleepy": "sleep", "wake": "surprise", "smile": "happy"}
-BG_TOP = (30, 30, 33)
-BG_BOTTOM = (16, 16, 18)
+
+class Face:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._state = "idle"
+        self._error_code = ""
+        self._board = None
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "face": self._state,
+                "error_code": self._error_code,
+                "size": f"{WIDTH}x{HEIGHT}",
+                "board": self._board is not None,
+                "fps": FPS,
+                "numpy": False,
+                "rig": "shim",
+            }
+
+    def set_state(self, state: str, error_code: str = "") -> str:
+        s = (state or "idle").strip().lower()
+        s = _ALIAS.get(s, s)
+        if s not in STATES:
+            s = "idle"
+        with self._lock:
+            self._state = s
+            self._error_code = (error_code or "").upper()
+        return s
+
+    def start(self) -> None:
+        return
+
+    def stop(self) -> None:
+        return
+
+FACE = Face()
+
+def set_state(state: str, error_code: str = "") -> str:
+    return FACE.set_state(state, error_code)
+
+def start() -> None:
+    FACE.start()
+
+def snapshot() -> dict:
+    return FACE.snapshot()
