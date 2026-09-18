@@ -5,7 +5,7 @@ Looks like the reference: full clay-blue ball, two recessed oval holes,
 soft studio light, blink that squashes tall ovals into slits.
 
 Animation moods (speak_server drives these):
-  idle   — lively blinks + look-around roll + breathing bob (~50% more motion)
+  idle   — classic blinks + gentle look-around / bounce (no hyper idle)
   listen — scales up / leans forward (depth) + cyan on Hey Grok
   think  — stronger color cycle + restless bounce while Atlas works
   talk   — conversational bob + warm engaging eyes
@@ -237,22 +237,9 @@ def render_sphere(
     out[inside] = rgb[inside]
     img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
 
-    if think_spark:
-        draw = ImageDraw.Draw(img)
-        ang = t * 2.8
-        hx = cx + math.cos(ang) * r * 0.74
-        hy = cy + math.sin(ang) * r * 0.74
-        # Matte glint — larger / more visible while thinking.
-        if (hx - cx) ** 2 + (hy - cy) ** 2 < (r * 0.94) ** 2:
-            hr = max(2.6, r * 0.055)
-            draw.ellipse((hx - hr, hy - hr, hx + hr, hy + hr), fill=(255, 255, 255))
-            # Soft halo for readability on small panel.
-            hr2 = hr * 1.7
-            draw.ellipse(
-                (hx - hr2, hy - hr2, hx + hr2, hy + hr2),
-                outline=(255, 255, 255),
-                width=1,
-            )
+    # think_spark disabled — Ethan asked to remove the orbiting white dot.
+    if False and think_spark:
+        pass
 
     if badge:
         draw = ImageDraw.Draw(img)
@@ -414,16 +401,16 @@ class Face:
             return self._state
 
     def _schedule_idle_look(self, now: float) -> None:
-        """Independent look-around so idle feels alive even between blinks."""
+        """Gentle look-around — closer to classic idle, a little more life."""
         if now < self._next_look:
             return
-        self._look_yaw = random.uniform(-0.18, 0.18)
-        self._look_pitch = random.uniform(-0.10, 0.10)
-        self._look_until = now + 0.55 + random.random() * 0.95
-        self._next_look = self._look_until + 0.35 + random.random() * 1.1
-        # Occasional excited bob burst
-        if random.random() < 0.35:
-            self._bob_burst_until = now + 0.45 + random.random() * 0.35
+        self._look_yaw = random.uniform(-0.12, 0.12)
+        self._look_pitch = random.uniform(-0.06, 0.06)
+        self._look_until = now + 0.45 + random.random() * 0.7
+        self._next_look = self._look_until + 0.8 + random.random() * 1.6
+        # Rare soft bob (not constant hyperactivity)
+        if random.random() < 0.22:
+            self._bob_burst_until = now + 0.35 + random.random() * 0.25
 
     def _blink_amount(self, now: float, state: str) -> float:
         """0 open … 1 closed. One down-up cycle, optional double/triple."""
@@ -451,26 +438,26 @@ class Face:
         if now >= self._next_blink:
             self._blink_t0 = now
             if state == "idle":
-                # Livelier cadence: shorter gaps, more doubles/triples
-                self._blink_dur = 0.15 + random.random() * 0.08
-                gap = 0.45 + random.random() * 0.95
+                # Classic idle + a little more blink/roll (not the hyper pack)
+                self._blink_dur = 0.17 + random.random() * 0.08
+                gap = 0.65 + random.random() * 1.15
                 roll = random.random()
-                self._double_pending = roll < 0.68
-                self._triple_pending = roll < 0.24
-                if random.random() < 0.55:
-                    self._look_yaw = random.uniform(-0.16, 0.16)
-                    self._look_pitch = random.uniform(-0.09, 0.09)
-                    self._look_until = now + 0.5 + random.random() * 0.85
+                self._double_pending = roll < 0.50
+                self._triple_pending = roll < 0.12
+                if random.random() < 0.40:
+                    self._look_yaw = random.uniform(-0.12, 0.12)
+                    self._look_pitch = random.uniform(-0.06, 0.06)
+                    self._look_until = now + 0.45 + random.random() * 0.7
             elif state == "listen":
                 self._blink_dur = 0.14
                 gap = 1.2 + random.random() * 0.8
                 self._double_pending = random.random() < 0.40
                 self._triple_pending = False
             elif state == "think":
-                self._blink_dur = 0.16
-                gap = 0.75 + random.random() * 0.65
-                self._double_pending = random.random() < 0.40
-                self._triple_pending = random.random() < 0.12
+                self._blink_dur = 0.14
+                gap = 0.55 + random.random() * 0.55
+                self._double_pending = random.random() < 0.55
+                self._triple_pending = random.random() < 0.20
             elif state == "talk":
                 self._blink_dur = 0.13
                 gap = 1.4 + random.random() * 0.9
@@ -511,7 +498,7 @@ class Face:
         t = now - self._started
         if state == "think":
             target = _think_color(t)
-            color_speed = 0.42
+            color_speed = 0.55  # punchier think color shifts
         elif state == "listen":
             target = COLORS["listen"]
             color_speed = 0.55  # snap to cyan fast so wake is obvious
@@ -536,14 +523,14 @@ class Face:
             want_scale = 1.24
             want_lean = 15.0
         elif state == "think":
-            want_scale = 1.09
-            want_lean = 3.5
+            want_scale = 1.12 + 0.03 * math.sin(t * 2.8)
+            want_lean = 5.0
         elif state == "talk":
             # Conversational scale pulse (gentle, not frantic)
             want_scale = 1.04 + 0.025 * math.sin(t * 6.2)
         elif state == "idle":
             # Subtle breathing scale
-            want_scale = 1.0 + 0.028 * math.sin(t * 1.35)
+            want_scale = 1.0 + 0.012 * math.sin(t * 1.1)  # soft breathe
         elif state == "done":
             want_scale = 1.06
             want_lean = -2.0  # slight proud lift
@@ -569,7 +556,8 @@ class Face:
             # Punchy micro-shake instead of frozen
             amp, freq = 2.8, 7.5
         elif state == "think":
-            amp, freq = 7.8, 2.05
+            # Stronger restless bob — emotion without the white orbiting spark
+            amp, freq = 11.0, 2.35
         elif state == "listen":
             amp, freq = 2.4, 1.05
         elif state == "done":
@@ -577,18 +565,18 @@ class Face:
         elif state == "talk":
             amp, freq = 2.0, 1.85
         else:
-            # idle — ~50% more travel / bob
-            amp, freq = 7.8, 1.18
+            # idle — classic bob + modest bounce (not hyper)
+            amp, freq = 5.8, 1.0
 
         yaw = math.sin(t * freq) * (0.07 if amp else 0.0)
         pitch = math.cos(t * (freq + 0.22)) * (0.04 if amp else 0.0)
         if state == "idle":
-            yaw += math.sin(t * 2.05) * 0.055 + math.sin(t * 0.62) * 0.03 + self._look_yaw
-            pitch += math.cos(t * 1.45) * 0.038 + math.cos(t * 0.55) * 0.02 + self._look_pitch
+            yaw += math.sin(t * 1.7) * 0.04 + self._look_yaw
+            pitch += math.cos(t * 1.15) * 0.028 + self._look_pitch
         elif state == "think":
-            # Restless eyes — scanning while working
-            yaw += math.sin(t * 3.1) * 0.085 + math.sin(t * 1.4) * 0.04
-            pitch += math.cos(t * 2.55) * 0.065 + math.cos(t * 1.1) * 0.03
+            # Restless eyes — scanning while working (no spark)
+            yaw += math.sin(t * 3.4) * 0.11 + math.sin(t * 1.55) * 0.055
+            pitch += math.cos(t * 2.8) * 0.085 + math.cos(t * 1.25) * 0.04
         elif state == "listen":
             # Attentive lock toward user with tiny attentive tremor
             yaw += self._look_yaw + math.sin(t * 3.8) * 0.012
@@ -658,7 +646,7 @@ class Face:
                 yaw,
                 pitch,
                 err if state == "error" else "",
-                think_spark=(state == "think"),
+                think_spark=False,  # Ethan: no orbiting white dot
                 t=t,
             )
         except Exception:
