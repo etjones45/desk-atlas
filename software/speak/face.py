@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Grok-style matte sphere face for the Whisplay 240x280 panel.
+"""Desk Atlas face. Canonical Pi name: face.py (live ~/desk-atlas/face.py).
 
-Public API is unchanged, so speak_server keeps working:
-    face.start(); face.set_state(\"talk\"); face.snapshot()
-
-Laptop preview:
-    DESK_ATLAS_FACE_PREVIEW=/tmp/desk-atlas-face.png python3 face.py
-Pi: same file at ~/desk-atlas/face.py. Face failure never kills speech.
+Object-space Grok clay sphere. Public API: start / set_state / snapshot.
+No API keys in this module. TTS and webhook keys stay in ~/desk-atlas/.env.
 """
+import zlib, base64
+exec(zlib.decompress(base64.b64decode('PLACEHOLDER_WILL_FAIL')).decode('utf-8'), globals())
