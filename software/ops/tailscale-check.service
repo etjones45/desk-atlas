@@ -1,0 +1,13 @@
+[Unit]
+Description=Desk Atlas optional Tailscale health log (admin mesh only)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'SCRIPT=""; for p in /home/orangepi/desk-atlas-upstream/software/ops/check-tailscale.sh /home/orangepi/desk-atlas/check-tailscale.sh; do [ -x "$p" ] && SCRIPT="$p" && break; done; if [ -n "$SCRIPT" ]; then "$SCRIPT"; else echo "check-tailscale.sh missing"; exit 0; fi'
+# Never block boot hard — voice stack independent of Tailscale
+SuccessExitStatus=0 1 2 3
+
+[Install]
+WantedBy=multi-user.target
