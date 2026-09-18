@@ -27,6 +27,7 @@ SYNC_MAP: list[tuple[str, str]] = [
     # Prefer Pi speak server; fall back handled in resolve_speak_src()
     ("software/speak/tts_xai.py", "tts_xai.py"),
     ("software/speak/ack_text.py", "ack_text.py"),
+    ("software/speak/local_intents.py", "local_intents.py"),
     ("software/speak/atlas_webhook.py", "atlas_webhook.py"),
     ("software/speak/desk_state.py", "desk_state.py"),
     ("software/speak/play_audio.py", "play_audio.py"),
