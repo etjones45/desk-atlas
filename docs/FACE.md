@@ -15,7 +15,8 @@ face.set_state("error", "NET")
 face.snapshot()
 ```
 
-No API keys live in this module. TTS / webhook / OTA keys stay in
+This module is the object-space clay sphere (hop/lift, partial SPI dirty-rect,
+idle director). No API keys live here. TTS / webhook / OTA keys stay in
 `~/desk-atlas/.env` on the Pi (never git).
 
 ## Env (optional)
@@ -25,6 +26,7 @@ DESK_ATLAS_FACE=1
 DESK_ATLAS_FACE_W=240
 DESK_ATLAS_FACE_H=280
 DESK_ATLAS_FACE_FPS=24
+DESK_ATLAS_FACE_PARTIAL=1
 DESK_ATLAS_FACE_PREVIEW=/tmp/desk-atlas-face.png
 ```
 
