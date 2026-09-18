@@ -5,10 +5,11 @@ Looks like the reference: full clay-blue ball, two recessed oval holes,
 soft studio light, blink that squashes tall ovals into slits.
 
 Animation moods (speak_server drives these):
-  idle   — lively blinks + look-around roll
-  listen — obvious cyan color shift when Hey Grok is heard
-  think  — color-shifting + motion while Atlas works a task
-  talk/done/error — same character, mood recolor/motion
+  idle   — lively blinks + look-around roll + breathing bob (~50% more motion)
+  listen — scales up / leans forward (depth) + cyan on Hey Grok
+  think  — stronger color cycle + restless bounce while Atlas works
+  talk   — conversational bob + warm engaging eyes
+  done/error — readable, punchier cue
 
 speak_server calls set_state(). Laptop preview:
   DESK_ATLAS_FACE_PREVIEW=/tmp/desk-atlas-face.png python3 face.py
@@ -26,7 +27,7 @@ import time
 
 WIDTH = int(os.environ.get("DESK_ATLAS_FACE_W", "240"))
 HEIGHT = int(os.environ.get("DESK_ATLAS_FACE_H", "280"))
-FPS = float(os.environ.get("DESK_ATLAS_FACE_FPS", "12"))
+FPS = float(os.environ.get("DESK_ATLAS_FACE_FPS", "15"))
 DONE_HOLD_SEC = float(os.environ.get("DESK_ATLAS_FACE_DONE_HOLD", "2.5"))
 
 STATES = ("idle", "listen", "think", "talk", "done", "error")
@@ -34,26 +35,27 @@ STATES = ("idle", "listen", "think", "talk", "done", "error")
 # Matte clay colors — idle matches the reference ball.
 COLORS = {
     "idle": (28, 92, 228),
-    "listen": (0, 210, 230),  # vivid cyan — unmistakable vs idle blue
-    "think": (140, 100, 255),  # base; _render shifts while busy
-    "talk": (28, 92, 228),
-    "done": (28, 168, 78),
-    "error": (196, 36, 36),
+    "listen": (0, 220, 240),  # vivid cyan — unmistakable vs idle blue
+    "think": (150, 95, 255),  # base; _render shifts while busy
+    "talk": (36, 108, 235),  # slightly warmer/engaging blue
+    "done": (24, 185, 82),
+    "error": (210, 32, 32),
 }
 LED = {
     "idle": (20, 70, 200),
-    "listen": (0, 230, 255),
-    "think": (160, 100, 255),
-    "talk": (20, 70, 200),
-    "done": (20, 180, 70),
-    "error": (220, 20, 20),
+    "listen": (0, 240, 255),
+    "think": (170, 90, 255),
+    "talk": (28, 85, 220),
+    "done": (18, 200, 75),
+    "error": (235, 18, 18),
 }
-# Busy (think) color cycle — blue → cyan → purple → blue
+# Busy (think) color cycle — punchier blue → cyan → purple → magenta-blue
 _THINK_PALETTE = (
-    (70, 90, 255),
-    (0, 200, 230),
-    (190, 80, 255),
-    (40, 140, 255),
+    (55, 85, 255),
+    (0, 230, 245),
+    (210, 70, 255),
+    (30, 160, 255),
+    (160, 60, 255),
 )
 BG = (18, 18, 20)
 
@@ -86,9 +88,9 @@ def _ease(t: float) -> float:
 
 
 def _think_color(t: float) -> tuple[int, int, int]:
-    """Smooth cycle across _THINK_PALETTE while Atlas is working."""
+    """Smooth cycle across _THINK_PALETTE while Atlas is working (~60% faster/stronger)."""
     n = len(_THINK_PALETTE)
-    x = (t * 0.35) % n
+    x = (t * 0.58) % n
     i = int(x) % n
     j = (i + 1) % n
     frac = _ease(x - int(x))
@@ -223,7 +225,7 @@ def render_sphere(
     # Outside the sphere: dark studio + soft contact shadow.
     out = np.zeros((HEIGHT, WIDTH, 3), dtype=np.float32)
     out[:] = np.array(BG, dtype=np.float32)
-    # Contact shadow under the ball.
+    # Contact shadow under the ball (scales with radius for listen depth).
     sh_cy = cy + r * 0.82
     sh_rx = r * 0.78
     sh_ry = r * 0.18
@@ -237,13 +239,20 @@ def render_sphere(
 
     if think_spark:
         draw = ImageDraw.Draw(img)
-        ang = t * 2.0
-        hx = cx + math.cos(ang) * r * 0.72
-        hy = cy + math.sin(ang) * r * 0.72
-        # Tiny matte glint, not a cartoon spark — only if it stays on the ball.
-        if (hx - cx) ** 2 + (hy - cy) ** 2 < (r * 0.92) ** 2:
-            hr = max(2.0, r * 0.035)
+        ang = t * 2.8
+        hx = cx + math.cos(ang) * r * 0.74
+        hy = cy + math.sin(ang) * r * 0.74
+        # Matte glint — larger / more visible while thinking.
+        if (hx - cx) ** 2 + (hy - cy) ** 2 < (r * 0.94) ** 2:
+            hr = max(2.6, r * 0.055)
             draw.ellipse((hx - hr, hy - hr, hx + hr, hy + hr), fill=(255, 255, 255))
+            # Soft halo for readability on small panel.
+            hr2 = hr * 1.7
+            draw.ellipse(
+                (hx - hr2, hy - hr2, hx + hr2, hy + hr2),
+                outline=(255, 255, 255),
+                width=1,
+            )
 
     if badge:
         draw = ImageDraw.Draw(img)
@@ -277,6 +286,8 @@ class Face:
         self._look_yaw = 0.0
         self._look_pitch = 0.0
         self._look_until = 0.0
+        self._next_look = self._started + 0.8
+        self._bob_burst_until = 0.0
         self._preview_path = os.environ.get("DESK_ATLAS_FACE_PREVIEW", "").strip()
 
     def snapshot(self) -> dict:
@@ -299,11 +310,26 @@ class Face:
             if s == "listen":
                 # Quick double-blink so Ethan sees "I heard you"
                 self._blink_t0 = now
-                self._blink_dur = 0.16
+                self._blink_dur = 0.14
                 self._double_pending = True
                 self._triple_pending = False
                 self._look_yaw = 0.0
-                self._look_pitch = -0.04
+                self._look_pitch = -0.08  # eyes lock toward user
+                self._look_until = now + 1.4
+            elif s == "talk":
+                self._look_yaw = 0.0
+                self._look_pitch = -0.03
+                self._look_until = now + 0.6
+            elif s == "done":
+                # Punchy acknowledgment blink
+                self._blink_t0 = now
+                self._blink_dur = 0.15
+                self._double_pending = True
+                self._triple_pending = False
+            elif s == "error":
+                self._look_yaw = 0.0
+                self._look_pitch = 0.06
+                self._look_until = now + 0.8
             if s == "done":
                 self._done_until = now + DONE_HOLD_SEC
             else:
@@ -333,8 +359,16 @@ class Face:
         }
         self._started = time.monotonic() - seeds.get(applied, 1.0)
         self._color_now = COLORS[applied]
-        self._scale = 1.10 if applied == "listen" else 1.03 if applied == "talk" else 1.0
-        self._lean = 6.0 if applied == "listen" else 0.0
+        self._scale = (
+            1.22
+            if applied == "listen"
+            else 1.05
+            if applied == "talk"
+            else 1.08
+            if applied == "think"
+            else 1.0
+        )
+        self._lean = 14.0 if applied == "listen" else 3.0 if applied == "think" else 0.0
         self._blink_t0 = 0.0
         self._done_until = 0.0
         dest = path or self._preview_path
@@ -379,6 +413,18 @@ class Face:
                 self._done_until = 0.0
             return self._state
 
+    def _schedule_idle_look(self, now: float) -> None:
+        """Independent look-around so idle feels alive even between blinks."""
+        if now < self._next_look:
+            return
+        self._look_yaw = random.uniform(-0.18, 0.18)
+        self._look_pitch = random.uniform(-0.10, 0.10)
+        self._look_until = now + 0.55 + random.random() * 0.95
+        self._next_look = self._look_until + 0.35 + random.random() * 1.1
+        # Occasional excited bob burst
+        if random.random() < 0.35:
+            self._bob_burst_until = now + 0.45 + random.random() * 0.35
+
     def _blink_amount(self, now: float, state: str) -> float:
         """0 open … 1 closed. One down-up cycle, optional double/triple."""
         if state == "error":
@@ -389,13 +435,13 @@ class Face:
                 if self._triple_pending:
                     self._triple_pending = False
                     self._double_pending = True
-                    self._blink_t0 = now + 0.05
-                    self._blink_dur = 0.14
+                    self._blink_t0 = now + 0.045
+                    self._blink_dur = 0.13
                     return 0.0
                 if self._double_pending:
                     self._double_pending = False
-                    self._blink_t0 = now + 0.06
-                    self._blink_dur = 0.15
+                    self._blink_t0 = now + 0.05
+                    self._blink_dur = 0.14
                     return 0.0
                 self._blink_t0 = 0.0
                 return 0.0
@@ -405,28 +451,34 @@ class Face:
         if now >= self._next_blink:
             self._blink_t0 = now
             if state == "idle":
-                self._blink_dur = 0.18 + random.random() * 0.08
-                gap = 0.7 + random.random() * 1.1
+                # Livelier cadence: shorter gaps, more doubles/triples
+                self._blink_dur = 0.15 + random.random() * 0.08
+                gap = 0.45 + random.random() * 0.95
                 roll = random.random()
-                self._double_pending = roll < 0.55
-                self._triple_pending = roll < 0.18
-                if random.random() < 0.40:
-                    self._look_yaw = random.uniform(-0.12, 0.12)
-                    self._look_pitch = random.uniform(-0.06, 0.06)
-                    self._look_until = now + 0.45 + random.random() * 0.7
+                self._double_pending = roll < 0.68
+                self._triple_pending = roll < 0.24
+                if random.random() < 0.55:
+                    self._look_yaw = random.uniform(-0.16, 0.16)
+                    self._look_pitch = random.uniform(-0.09, 0.09)
+                    self._look_until = now + 0.5 + random.random() * 0.85
             elif state == "listen":
-                self._blink_dur = 0.16
-                gap = 1.4 + random.random() * 0.9
-                self._double_pending = random.random() < 0.35
+                self._blink_dur = 0.14
+                gap = 1.2 + random.random() * 0.8
+                self._double_pending = random.random() < 0.40
                 self._triple_pending = False
             elif state == "think":
-                self._blink_dur = 0.20
-                gap = 1.1 + random.random() * 0.8
-                self._double_pending = random.random() < 0.25
-                self._triple_pending = False
+                self._blink_dur = 0.16
+                gap = 0.75 + random.random() * 0.65
+                self._double_pending = random.random() < 0.40
+                self._triple_pending = random.random() < 0.12
             elif state == "talk":
-                self._blink_dur = 0.14
-                gap = 1.8 + random.random() * 1.0
+                self._blink_dur = 0.13
+                gap = 1.4 + random.random() * 0.9
+                self._double_pending = random.random() < 0.22
+                self._triple_pending = False
+            elif state == "done":
+                self._blink_dur = 0.16
+                gap = 1.6 + random.random() * 0.8
                 self._double_pending = False
                 self._triple_pending = False
             else:
@@ -459,74 +511,134 @@ class Face:
         t = now - self._started
         if state == "think":
             target = _think_color(t)
-            color_speed = 0.32
+            color_speed = 0.42
         elif state == "listen":
             target = COLORS["listen"]
-            color_speed = 0.45  # snap to cyan fast so wake is obvious
+            color_speed = 0.55  # snap to cyan fast so wake is obvious
+        elif state == "talk":
+            target = COLORS["talk"]
+            color_speed = 0.28
+        elif state == "done":
+            target = COLORS["done"]
+            color_speed = 0.40
+        elif state == "error":
+            target = COLORS["error"]
+            color_speed = 0.50
         else:
             target = COLORS[state]
-            color_speed = 0.20
+            color_speed = 0.22
         self._color_now = _mix(self._color_now, target, color_speed)
 
         want_scale = 1.0
         want_lean = 0.0
         if state == "listen":
-            want_scale = 1.14
-            want_lean = 8.0
+            # Depth: roll/zoom toward user
+            want_scale = 1.24
+            want_lean = 15.0
         elif state == "think":
-            want_scale = 1.06
-            want_lean = 2.0
+            want_scale = 1.09
+            want_lean = 3.5
         elif state == "talk":
-            want_scale = 1.04
-        self._scale = _lerp(self._scale, want_scale, 0.20)
-        self._lean = _lerp(self._lean, want_lean, 0.20)
+            # Conversational scale pulse (gentle, not frantic)
+            want_scale = 1.04 + 0.025 * math.sin(t * 6.2)
+        elif state == "idle":
+            # Subtle breathing scale
+            want_scale = 1.0 + 0.028 * math.sin(t * 1.35)
+        elif state == "done":
+            want_scale = 1.06
+            want_lean = -2.0  # slight proud lift
+        elif state == "error":
+            want_scale = 1.02
+        self._scale = _lerp(self._scale, want_scale, 0.22)
+        self._lean = _lerp(self._lean, want_lean, 0.22)
 
         blink = self._blink_amount(now, state) if force_blink is None else force_blink
 
+        if state == "idle":
+            self._schedule_idle_look(now)
+
         if self._look_until and now >= self._look_until:
-            self._look_yaw = _lerp(self._look_yaw, 0.0, 0.25)
-            self._look_pitch = _lerp(self._look_pitch, 0.0, 0.25)
+            self._look_yaw = _lerp(self._look_yaw, 0.0, 0.28)
+            self._look_pitch = _lerp(self._look_pitch, 0.0, 0.28)
             if abs(self._look_yaw) < 0.01 and abs(self._look_pitch) < 0.01:
                 self._look_yaw = 0.0
                 self._look_pitch = 0.0
                 self._look_until = 0.0
 
         if state == "error":
-            amp, freq = 0.0, 0.0
+            # Punchy micro-shake instead of frozen
+            amp, freq = 2.8, 7.5
         elif state == "think":
-            amp, freq = 4.8, 1.55
+            amp, freq = 7.8, 2.05
         elif state == "listen":
-            amp, freq = 3.2, 1.15
+            amp, freq = 2.4, 1.05
         elif state == "done":
-            amp, freq = 1.6, 0.55
+            amp, freq = 2.8, 0.85
         elif state == "talk":
-            amp, freq = 2.4, 2.2
+            amp, freq = 2.0, 1.85
         else:
-            amp, freq = 5.2, 0.95
+            # idle — ~50% more travel / bob
+            amp, freq = 7.8, 1.18
 
         yaw = math.sin(t * freq) * (0.07 if amp else 0.0)
         pitch = math.cos(t * (freq + 0.22)) * (0.04 if amp else 0.0)
         if state == "idle":
-            yaw += math.sin(t * 1.7) * 0.035 + self._look_yaw
-            pitch += math.cos(t * 1.15) * 0.025 + self._look_pitch
+            yaw += math.sin(t * 2.05) * 0.055 + math.sin(t * 0.62) * 0.03 + self._look_yaw
+            pitch += math.cos(t * 1.45) * 0.038 + math.cos(t * 0.55) * 0.02 + self._look_pitch
         elif state == "think":
-            yaw += math.sin(t * 2.4) * 0.05
-            pitch += math.cos(t * 1.9) * 0.04
+            # Restless eyes — scanning while working
+            yaw += math.sin(t * 3.1) * 0.085 + math.sin(t * 1.4) * 0.04
+            pitch += math.cos(t * 2.55) * 0.065 + math.cos(t * 1.1) * 0.03
         elif state == "listen":
-            yaw += self._look_yaw
-            pitch += self._look_pitch - 0.02
+            # Attentive lock toward user with tiny attentive tremor
+            yaw += self._look_yaw + math.sin(t * 3.8) * 0.012
+            pitch += self._look_pitch - 0.035 + math.cos(t * 2.9) * 0.01
+        elif state == "talk":
+            # Warm engaging eye motion — soft gaze wander
+            yaw += math.sin(t * 1.55) * 0.045 + math.sin(t * 0.7) * 0.02
+            pitch += math.cos(t * 1.25) * 0.032 + self._look_pitch
+        elif state == "done":
+            yaw += math.sin(t * 1.2) * 0.02
+            pitch += -0.02 + math.cos(t * 0.9) * 0.015
+        elif state == "error":
+            yaw += math.sin(t * freq) * 0.04
+            pitch += self._look_pitch
 
         dx = math.sin(t * freq) * amp if freq else 0.0
         dy = (math.cos(t * (freq + 0.2)) * (amp * 0.40) if freq else 0.0) + self._lean
         if state == "talk":
-            dy += math.sin(t * 5.5) * 1.4
+            # Conversational speaking bob (synced-ish pulse)
+            dy += math.sin(t * 6.8) * 2.0 + math.sin(t * 3.4) * 0.7
+            dx += math.sin(t * 2.1) * 0.9
         elif state == "idle":
-            dx += math.sin(t * 0.45) * 1.8
-            dy += math.cos(t * 0.38) * 1.2
+            dx += math.sin(t * 0.55) * 2.8 + math.sin(t * 1.9) * 1.1
+            dy += math.cos(t * 0.48) * 1.9 + math.sin(t * 1.55) * 0.9
+            if now < self._bob_burst_until:
+                dy += math.sin(t * 9.0) * 2.4
+                dx += math.cos(t * 7.5) * 1.2
+        elif state == "think":
+            dx += math.sin(t * 2.7) * 2.2
+            dy += math.cos(t * 2.1) * 1.8 + math.sin(t * 4.0) * 1.1
+        elif state == "listen":
+            # Subtle forward bob while "rolling" toward user
+            dy += math.sin(t * 2.2) * 1.1
+            # Slight squash feel via vertical compress during lean settle
+            dx *= 0.55
+        elif state == "done":
+            dy += math.sin(t * 3.5) * 1.2
+        elif state == "error":
+            dx = math.sin(t * freq) * amp
+            dy = self._lean + math.cos(t * (freq * 1.3)) * (amp * 0.25)
 
         cx = WIDTH / 2 + dx
         cy = HEIGHT / 2 + 6 + dy
+        # Base radius; listen scale reads as zoom/depth
         radius = min(WIDTH, HEIGHT) * 0.40 * self._scale
+        # Subtle squash when leaning forward (listen) or bouncing (talk/idle burst)
+        if state == "listen":
+            radius *= 1.0 + 0.02 * math.sin(t * 2.0)  # slight breathe while forward
+        elif state == "talk":
+            radius *= 1.0 + 0.012 * math.sin(t * 6.8)
 
         led_rgb = None
         if state in ("think", "listen"):

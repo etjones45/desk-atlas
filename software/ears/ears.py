@@ -50,6 +50,7 @@ BASE = HERE if (HERE / "face.py").is_file() or (HERE / ".env").is_file() else HE
 DROPBOX = Path(os.environ.get("ATLAS_DROPBOX") or (BASE / "dropbox"))
 WAKE_PHRASE = (os.environ.get("DESK_WAKE_PHRASE") or "hey grok").strip().lower() or "hey grok"
 FACE_URL = (os.environ.get("DESK_FACE_URL") or "http://127.0.0.1:8787/face").strip()
+VOICE_IN_URL = (os.environ.get("DESK_VOICE_IN_URL") or "http://127.0.0.1:8787/voice-in").strip()
 
 
 def log(obj: dict) -> None:
@@ -187,12 +188,12 @@ def record_until_silence(
     min_sec = float(
         min_sec
         if min_sec is not None
-        else os.environ.get("DESK_UTTERANCE_MIN_SEC", "1.2")
+        else os.environ.get("DESK_UTTERANCE_MIN_SEC", "0.8")
     )
     silence_sec = float(
         silence_sec
         if silence_sec is not None
-        else os.environ.get("DESK_UTTERANCE_SILENCE_SEC", "1.1")
+        else os.environ.get("DESK_UTTERANCE_SILENCE_SEC", "0.75")
     )
     energy = float(
         energy
@@ -321,13 +322,41 @@ def strip_wake(transcript: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def post_local_voice_in(text: str) -> dict | None:
+    """Prefer speak_server /voice-in: local intents + ack TTS + webhook in parallel."""
+    try:
+        req = urllib.request.Request(
+            VOICE_IN_URL,
+            data=json.dumps({"text": text, "thread": "desk-work"}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            try:
+                return json.loads(raw) if raw else {"ok": True}
+            except json.JSONDecodeError:
+                return {"ok": True, "raw": raw[:200]}
+    except Exception as e:
+        log({"kind": "listen", "local_voice_in_error": str(e)})
+        return None
+
+
 def post_utterance(text: str) -> None:
     text = (text or "").strip()
     if not text:
         return
+    # Fast path: local speak_server (acks + on-device time/date; webhook async there).
+    local = post_local_voice_in(text)
+    if local and local.get("ok"):
+        log({"kind": "listen", "via": "local_voice_in", "result": {k: local.get(k) for k in ("local", "acked", "ack", "answer")}})
+        if not local.get("local"):
+            set_face("think")
+        return
+    # Fallback: direct Atlas webhook (speak_server down).
     try:
         code, body = post_voice_in(text, thread="desk-work", source="ears-listen")
-        log({"kind": "listen", "webhook": code, "body": (body or "")[:200]})
+        log({"kind": "listen", "webhook": code, "body": (body or "")[:200], "via": "direct_webhook"})
         if 200 <= int(code) < 300:
             set_face("think")
     except WebhookError as e:
@@ -418,7 +447,7 @@ def listen_stt_keyphrase(utterance_sec: float) -> None:
     rate = 16000
     gate_sec = float(os.environ.get("DESK_WAKE_GATE_SEC", "1.6"))
     energy_threshold = float(os.environ.get("DESK_WAKE_ENERGY", "350"))
-    cooldown = float(os.environ.get("DESK_WAKE_COOLDOWN", "1.0"))
+    cooldown = float(os.environ.get("DESK_WAKE_COOLDOWN", "0.5"))
     device = os.environ.get("ATLAS_RECORD_DEVICE", "default")
     log(
         {

@@ -110,25 +110,36 @@ def _start_face() -> None:
 
 
 
+def _face_after_speech(kind: str) -> None:
+    """Ack should return to think while busy; mouth closer / local can idle."""
+    snap = STATE.snapshot()
+    if kind == "ack" and snap.get("mode") == "busy":
+        _face("think")
+    elif kind == "local":
+        _face("idle")
+    else:
+        _face("done")
+        _face("idle")
+
+
 def _speak_async(text: str, kind: str) -> None:
     def run() -> None:
         try:
             _face("talk")
             if DRY_RUN:
                 _log_event({"kind": kind, "dry_run": True, "say": text})
-                _face("idle")
+                _face_after_speech(kind)
                 return
             audio = synthesize(text)
             _log_event({"kind": kind, "say": text, "bytes": len(audio)})
             play_bytes(audio)
-            _face("done")
-            _face("idle")
+            _face_after_speech(kind)
         except TtsError as e:
             _log_event({"kind": kind, "error": "tts", "detail": str(e)})
-            _face("idle")
+            _face_after_speech(kind)
         except Exception as e:
             _log_event({"kind": kind, "error": "speak", "detail": str(e)})
-            _face("idle")
+            _face_after_speech(kind)
 
     threading.Thread(target=run, name=f"tts-{kind}", daemon=True).start()
 
@@ -187,8 +198,9 @@ def handle_voice_in(body: dict) -> dict:
         _speak_async(ack, kind="ack")
     else:
         STATE.mark_busy(thread)
-        _face("think")
 
+    # Stay in think while Atlas works (ack TTS briefly overrides via talk, then returns).
+    _face("think")
     _webhook_async(text, thread, recap or None)
     snap = STATE.snapshot()
     return {
