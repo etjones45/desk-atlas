@@ -15,7 +15,7 @@ ATLAS_PLAY=0 python3 speak_server.py
 cloudflared tunnel --url http://127.0.0.1:8080
 ```
 
-Copy the `https://…trycloudflare.com` URL into `config.json` as `speak_url`, and tell Atlas that mouth URL for `/speak` POSTs.
+Copy the `https://….trycloudflare.com` URL into `config.json` as `speak_url`, and tell Atlas that mouth URL for `/speak` POSTs.
 
 Header: `X-Atlas-Speak-Secret: <contents of speak.secret>`  
 Body: `{"text":"short spoken reply"}`
