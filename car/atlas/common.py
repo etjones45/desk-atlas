@@ -86,29 +86,15 @@ def usb_lowlevel(udc: str | None) -> dict:
     dev = os.path.realpath(f"/sys/class/udc/{udc}/device")
     out["otg_state"] = read_text(f"{dev}/mode")
     out["vbus"] = read_text(f"{dev}/vbus")
-    for d in (f"/sys/kernel/debug/usb/{udc}", f"/sys/kernel/debug/{udc}"):
-        txt = read_text(f"{d}/regdump")
-        if not txt:
-            continue
-        for line in txt.splitlines():
-            k, _, v = line.partition(":")
-            k, v = k.strip(), v.strip()
-            if k in ("DevCtl", "Power", "FAddr"):
-                out[k.lower()] = v
-        dc = out.get("devctl")
-        try:
-            n = int(dc, 16)
-            out["session"] = n & 1
-            out["vbus_level"] = (n >> 3) & 3
-            out["b_device"] = (n >> 7) & 1
-        except (TypeError, ValueError):
-            pass
-        break
+    # Note: don't read the musb regdump here; on sunxi it floods the kernel log ("unknown readw offset").
+    v = out.get("vbus") or ""
+    out["vbus_on"] = ("Vbus on" in v) if v else None
     try:
         for line in Path("/proc/interrupts").read_text().splitlines():
             if "musb" in line.lower():
                 parts = line.split()
-                out["irq_count"] = sum(int(x) for x in parts[1:] if x.isdigit())
+                ncpu = os.cpu_count() or 4  # columns after "NNN:" are per-CPU counts, then the controller info
+                out["irq_count"] = sum(int(x) for x in parts[1:1 + ncpu] if x.isdigit())
                 break
     except OSError:
         pass
@@ -125,7 +111,8 @@ def usb_kernel_log(lines: int = 12) -> list[str]:
     if code != 0:
         return []
     keep = [ln for ln in out.splitlines()
-            if any(k in ln.lower() for k in ("musb", "sun4i-usb", "udc", "gadget", "mass_storage", "vbus", "extcon", "5100000.usb"))]
+            if any(k in ln.lower() for k in ("musb", "sun4i-usb", "udc", "gadget", "mass_storage", "vbus", "extcon", "5100000.usb"))
+            and "unknown read" not in ln and "unknown write" not in ln]
     return [ln[:180] for ln in keep[-lines:]]
 
 

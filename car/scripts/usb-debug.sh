@@ -44,7 +44,7 @@ echo "overlays: $(grep -E '^(overlays|user_overlays)=' /boot/orangepiEnv.txt 2>/
 echo "-- modules"
 lsmod | grep -iE 'musb|sunxi|phy_sun4i|libcomposite|mass_storage|configfs|usb_f' | awk '{print $1}' | tr '\n' ' '; echo
 echo "-- kernel log (USB lines)"
-dmesg 2>/dev/null | grep -iE 'musb|sun4i-usb|usb.?phy|udc|gadget|mass_storage|vbus|extcon|otg|5100000\.usb' | tail -25
+dmesg 2>/dev/null | grep -iE 'musb|sun4i-usb|usb.?phy|udc|gadget|mass_storage|vbus|extcon|otg|5100000\.usb' | grep -v 'unknown read\|unknown write' | tail -25
 echo "-- gadget service"
 journalctl -u car-atlas-teslacam -b --no-pager -n 12 2>/dev/null | cut -c1-200
 echo "== end =="

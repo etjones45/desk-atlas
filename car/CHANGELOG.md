@@ -1,5 +1,8 @@
 # Car Atlas versions
 
+## 1.1.2 (2026-11-09)
+- Stop the USB readings from filling the system log (one register dump on this chip logs warnings).
+
 ## 1.1.1 (2026-11-09)
 - Dashcam USB troubleshooting: `car-atlas usb-debug` shows what the Pi's USB chip sees (power from the car,
   session, kernel messages). The same readings go to the app so Atlas can check them remotely.
