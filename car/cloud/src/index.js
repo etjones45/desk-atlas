@@ -7,6 +7,9 @@ import { sendPush, b64u, unb64u } from "./push.js";
 const enc = new TextEncoder();
 const now = () => Date.now() / 1000;
 const SESSION_DAYS = 180;
+// Version of this web app + server. Bump together with car/VERSION on every release.
+const APP_VERSION = "1.1";
+const REPO_RAW = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car";
 const COMMANDS = {
   upload_recent: "Upload recent dashcam",
   restart_dish: "Restart Starlink",
@@ -14,6 +17,9 @@ const COMMANDS = {
   restart_services: "Restart Pi services",
   reboot_pi: "Restart the Pi",
   test_alert: "Send a test alert from the Pi",
+  usb_rebind: "Re-offer the dashcam drive",
+  usb_fix: "Switch USB0 to fallback mode",
+  usb_fix_undo: "Undo the USB0 fallback",
 };
 
 // ---------- helpers ----------
@@ -76,6 +82,68 @@ async function readJson(req) {
 const num = (v) => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? null : Number(v));
 const dayOf = (ts) => new Date(ts * 1000).toLocaleDateString("en-CA", { timeZone: "America/Denver" });
 
+// ---------- versions ----------
+// Compare "1.10" vs "1.9" the way people expect. Returns -1, 0, 1 (null if either is missing).
+function cmpVersion(a, b) {
+  if (!a || !b) return null;
+  const pa = String(a).split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = String(b).split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+// Newest released version = car/VERSION on the GitHub branch the Pi updates from. Cached ~10 min.
+async function latestVersion(env, ctx, force = false) {
+  const cached = await kvGet(env, "latest_version");
+  const at = Number(await kvGet(env, "latest_version_at")) || 0;
+  if (!force && cached && now() - at < 600) return { version: cached, checked_at: at };
+  const refresh = (async () => {
+    try {
+      const r = await fetch(`${REPO_RAW}/VERSION?t=${Math.floor(now() / 300)}`, { cf: { cacheTtl: 120 } });
+      if (!r.ok) throw new Error(`GitHub ${r.status}`);
+      const v = (await r.text()).trim();
+      if (!/^\d+(\.\d+){0,3}$/.test(v)) throw new Error("bad VERSION");
+      await kvSet(env, "latest_version", v);
+      await kvSet(env, "latest_version_at", String(now()));
+      return { version: v, checked_at: now() };
+    } catch (e) {
+      return { version: cached || null, checked_at: at || null, error: String(e.message || e) };
+    }
+  })();
+  // Serve the cached answer right away when we have one; refresh in the background.
+  if (cached && !force && ctx) { ctx.waitUntil(refresh); return { version: cached, checked_at: at }; }
+  return await refresh;
+}
+function versionInfo(status, statusAt, latest) {
+  const pi = status ? (status.pi?.version || "1.0") : null; // builds before 1.1 didn't report a version
+  const cmpPi = cmpVersion(pi, latest.version);
+  let state = "unknown";
+  if (pi && latest.version) state = cmpPi === 0 ? "current" : cmpPi < 0 ? "behind" : "ahead";
+  return {
+    app: APP_VERSION,
+    latest: latest.version,
+    latest_checked_at: latest.checked_at,
+    latest_error: latest.error || null,
+    pi,
+    pi_sha: status?.pi?.code_version || null,
+    pi_update: status?.pi?.update || null,
+    pi_reported_at: statusAt,
+    pi_state: state,
+    app_state: latest.version ? (cmpVersion(APP_VERSION, latest.version) >= 0 ? "current" : "behind") : "unknown",
+  };
+}
+// Where is the car? Prefer what the Pi reports now (USB GPS / dish), else the last logged point.
+function carLocation(status, statusAt, lastRow) {
+  const l = status?.location;
+  if (l && num(l.lat) !== null && num(l.lon) !== null) {
+    return { ts: num(l.at) || statusAt, lat: num(l.lat), lon: num(l.lon), source: l.source || null,
+      stale: !!l.stale, speed_mph: num(l.speed_mph) };
+  }
+  return lastRow ? { ...lastRow, source: "history", stale: true } : null;
+}
+
 // ---------- auth ----------
 async function sessionFrom(req, env) {
   const id = cookie(req, "ca_s");
@@ -120,7 +188,7 @@ async function addAlert(env, ctx, { title, message, category = "info", link = nu
 }
 
 // ---------- app API ----------
-async function overview(env) {
+async function overview(env, ctx) {
   const latest = await kvGet(env, "latest");
   const latestAt = Number(await kvGet(env, "latest_at")) || null;
   const clips = (await env.DB.prepare(
@@ -131,13 +199,17 @@ async function overview(env) {
     "SELECT SUM(kind='dashcam') AS dashcam, SUM(kind='sentry') AS sentry, SUM(kind='requested') AS requested, COALESCE(SUM(size_mb),0) AS total_mb FROM clips").first();
   const today = await env.DB.prepare("SELECT * FROM usage_daily WHERE day=?").bind(dayOf(now())).first();
   const lastLoc = await env.DB.prepare("SELECT ts, lat, lon FROM history WHERE lat IS NOT NULL ORDER BY ts DESC LIMIT 1").first();
+  const status = latest ? JSON.parse(latest) : null;
+  const latestV = await latestVersion(env, ctx);
   return {
     server_time: now(),
-    status: latest ? JSON.parse(latest) : null,
+    app_version: APP_VERSION,
+    versions: versionInfo(status, latestAt, latestV),
+    status,
     status_at: latestAt,
     paired: !!(await kvGet(env, "device_key_hash")),
     paired_at: Number(await kvGet(env, "paired_at")) || null,
-    clips, alerts, commands, counts, today, last_location: lastLoc,
+    clips, alerts, commands, counts, today, last_location: carLocation(status, latestAt, lastLoc),
     command_labels: COMMANDS,
   };
 }
@@ -153,7 +225,35 @@ async function history(env, url) {
 
 async function handleApp(req, env, ctx, url, path) {
   const m = req.method;
-  if (path === "/api/overview" && m === "GET") return json(await overview(env));
+  if (path === "/api/overview" && m === "GET") return json(await overview(env, ctx));
+  if (path === "/api/version" && m === "GET") {
+    const latest = await kvGet(env, "latest");
+    const at = Number(await kvGet(env, "latest_at")) || null;
+    const lv = await latestVersion(env, ctx, url.searchParams.get("refresh") === "1");
+    return json(versionInfo(latest ? JSON.parse(latest) : null, at, lv));
+  }
+  if (path === "/api/changelog" && m === "GET") {
+    let text = await kvGet(env, "changelog");
+    const at = Number(await kvGet(env, "changelog_at")) || 0;
+    if (!text || now() - at > 3600) {
+      try {
+        const r = await fetch(`${REPO_RAW}/CHANGELOG.md?t=${Math.floor(now() / 3600)}`, { cf: { cacheTtl: 600 } });
+        if (r.ok) {
+          text = (await r.text()).slice(0, 20000);
+          await kvSet(env, "changelog", text);
+          await kvSet(env, "changelog_at", String(now()));
+        }
+      } catch { /* keep the cached copy */ }
+    }
+    return json({ text: text || "" });
+  }
+  if (path === "/api/clip-pins" && m === "GET") {
+    const days = Math.min(Number(url.searchParams.get("days")) || 90, 365);
+    const rows = (await env.DB.prepare(
+      "SELECT id, kind, folder, drive_url, reason, city, lat, lon, event_ts, uploaded_at FROM clips WHERE lat IS NOT NULL AND lon IS NOT NULL AND uploaded_at > ? ORDER BY uploaded_at DESC LIMIT 500")
+      .bind(now() - days * 86400).all()).results;
+    return json({ days, pins: rows });
+  }
   if (path === "/api/history" && m === "GET") return json(await history(env, url));
   if (path === "/api/usage" && m === "GET") {
     const days = Math.min(Number(url.searchParams.get("days")) || 30, 365);
@@ -259,7 +359,8 @@ async function handlePi(req, env, ctx, path) {
     await kvSet(env, "latest_at", String(t));
     const last = await env.DB.prepare("SELECT MAX(ts) AS ts FROM history").first();
     if (!last.ts || t - last.ts >= 50) {
-      const pi = s.pi || {}, d = s.starlink || {}, cam = s.teslacam || {}, loc = d.location || {};
+      const pi = s.pi || {}, d = s.starlink || {}, cam = s.teslacam || {};
+      const loc = (s.location && !s.location.stale ? s.location : null) || d.location || {};
       await env.DB.prepare(`INSERT OR REPLACE INTO history(ts, net, internet, dish_ok, state, quality, ping, drop_pct, obstructed, down, up, power, temp, load1, wifi_signal, gadget, usb_link, lat, lon)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
         t, pi.network || null, pi.internet ? 1 : 0, d.reachable ? 1 : 0, d.state || null, d.quality || null,
@@ -274,7 +375,8 @@ async function handlePi(req, env, ctx, path) {
         .bind(dayOf(t), num(u.down) || 0, num(u.up) || 0, num(s.teslacam?.starlink_uploaded_today_mb) || 0).run();
     }
     const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM commands WHERE status='queued'").first();
-    return json({ ok: true, commands_waiting: pending.n });
+    const lv = await latestVersion(env, ctx);
+    return json({ ok: true, commands_waiting: pending.n, latest_version: lv.version });
   }
   if (path === "/api/pi/coverage" && m === "POST") {
     const b = await readJson(req);
@@ -330,7 +432,7 @@ export default {
     const path = url.pathname;
     if (!path.startsWith("/api/")) return env.ASSETS.fetch(req);
     try {
-      if (path === "/api/health") return json({ ok: true, time: now() });
+      if (path === "/api/health") return json({ ok: true, time: now(), version: APP_VERSION });
 
       if (path === "/api/login" && req.method === "POST") {
         const ip = req.headers.get("CF-Connecting-IP") || "unknown";
@@ -368,7 +470,7 @@ export default {
         return await handlePi(req, env, ctx, path);
       }
       const sess = await sessionFrom(req, env);
-      if (path === "/api/me") return json({ authed: !!sess, vapid_public: env.VAPID_PUBLIC });
+      if (path === "/api/me") return json({ authed: !!sess, vapid_public: env.VAPID_PUBLIC, app_version: APP_VERSION });
       if (!sess) return err(401, "Please log in");
       return await handleApp(req, env, ctx, url, path);
     } catch (e) {

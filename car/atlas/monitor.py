@@ -349,6 +349,13 @@ def prefer_home_wifi(cfg, net: str, state: dict) -> None:
             return
 
 
+def version_tuple(v) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).strip().split("."))
+    except ValueError:
+        return (0,)
+
+
 def note_version_change(cfg) -> None:
     st = read_json(MON_STATE, {}) or {}
     v = version()
@@ -387,6 +394,7 @@ def main() -> None:
     last_point_ts = last_sample_ts = 0.0
     home_state: dict = {}
     last_cloud_status = last_cloud_cov = last_cmd_poll = 0.0
+    last_update_kick = time.time() - 600  # give the boot-time update check a head start
     last_location = (read_json(MON_STATE, {}) or {}).get("last_location")
     version_noted = False
     synced, synced_at = False, 0.0
@@ -514,6 +522,13 @@ def main() -> None:
                         last_cloud_status = time.time()
                         if resp.get("commands_waiting"):
                             last_cmd_poll = 0.0
+                        # The app knows a newer version exists: pull it now instead of waiting for the timer.
+                        newer = resp.get("latest_version")
+                        if newer and version_tuple(newer) > version_tuple(version()) \
+                                and time.time() - last_update_kick > 900:
+                            last_update_kick = time.time()
+                            log(C, f"v{newer} is available (running v{version()}); updating now")
+                            run(["systemctl", "start", "--no-block", "car-atlas-update.service"], timeout=15)
                 if time.time() - last_cmd_poll >= 30:
                     last_cmd_poll = time.time()
                     run_commands(cfg, dish, net)

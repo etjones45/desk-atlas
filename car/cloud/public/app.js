@@ -8,6 +8,7 @@
     sentry: "https://drive.google.com/drive/folders/1JfANie1Q0J9mF424Ezawx67P5unRmEnX",
   };
   const INSTALL_URL = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car/install.sh";
+  const APP_VERSION = "1.1"; // this app build; the server reports its own (they match after a deploy)
 
   // ---------- icons ----------
   const P = {
@@ -39,6 +40,11 @@
     shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     out: '<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 16l-4-4 4-4"/><path d="M6 12h10"/>',
+    usb: '<path d="M12 21V5"/><path d="M9 6l3-3 3 3"/><path d="M12 15l-4-3V9"/><path d="M12 13l4-3V8"/><circle cx="8" cy="8" r="1.4"/><rect x="14.6" y="6" width="2.8" height="2.6"/><circle cx="12" cy="20" r="1.6"/>',
+    tag: '<path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.5"/>',
+    star: '<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/>',
+    gps: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+    speed: '<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/>',
     ext: '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   };
   const ic = (n, extra = "") => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${P[n] || ""}</svg>`;
@@ -86,6 +92,34 @@
     return c.kind === "sentry" ? "Sentry event" : "Saved clip";
   }
   const kindLabel = { dashcam: "Dashcam", sentry: "Sentry", requested: "Requested" };
+  function cmpVer(a, b) {
+    if (!a || !b) return null;
+    const pa = String(a).split(".").map((x) => parseInt(x, 10) || 0), pb = String(b).split(".").map((x) => parseInt(x, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d > 0 ? 1 : -1; }
+    return 0;
+  }
+  // Versions: what the Pi runs vs. the newest release on GitHub (what it should be on).
+  function verInfo() {
+    const ov = state.ov || {};
+    const V = ov.versions || {};
+    const pi = V.pi, latest = V.latest;
+    const c = cmpVer(pi, latest);
+    const fresh = !!(ov.status_at && ov.server_time - ov.status_at < 150);
+    let level = "", text = "Waiting for the Pi", short = "—";
+    if (pi && latest) {
+      if (c === 0) { level = "ok"; text = "Up to date"; short = `v${pi}`; }
+      else if (c < 0) { level = "warn"; text = `Update waiting: v${pi} → v${latest}`; short = `v${pi} → v${latest}`; }
+      else { level = "accent"; text = `Ahead of release (v${pi})`; short = `v${pi}`; }
+    } else if (pi) { text = `Running v${pi}`; short = `v${pi}`; }
+    const up = V.pi_update || {};
+    let note = "";
+    if (c !== null && c < 0) {
+      note = fresh ? "The Pi is online, so it should pick this up within a few minutes. Tap Update now to start it right away."
+        : "The Pi updates itself the next time the car is awake and online. It checks right after it turns on.";
+    }
+    return { ...V, level, text, short, behind: c !== null && c < 0, note, upd: up, fresh };
+  }
+  const verBadge = (v, cls = "") => v ? `<span class="ver ${cls}">v${esc(v)}</span>` : `<span class="ver">—</span>`;
   function greet() {
     const h = new Date().getHours();
     return (h < 5 ? "Up late" : h < 12 ? "Morning" : h < 17 ? "Afternoon" : "Evening") + ", ET";
@@ -155,12 +189,16 @@
     else if (!s) { level = "idle"; headline = "Pi is connected"; note = "Waiting for its first check-in. Wake the car so the Pi turns on."; }
     else if (!fresh) { level = "idle"; headline = "Car is asleep"; note = `Last check-in ${ago(ov.status_at)}. The Pi is off while the car sleeps. With Sentry Mode on, the car stays awake and so does the Pi.`; }
     else if (cam.gadget === "unsupported" || cam.gadget === "error") { level = "bad"; headline = "Dashcam isn't recording to the Pi"; note = "Keep a USB flash drive in the car until this is fixed."; }
+    else if (cam.gadget === "attached" && cam.usb_link !== "configured" && (pi.uptime_s || 0) > 120) { level = "bad"; headline = "Car isn't seeing the dashcam drive"; note = "The Pi is ready but the car hasn't connected. The car's cable must be in the Pi's USB0 port. Footage tab shows where."; }
     else if (onStarlink && !link.pi_talking_to_dish) { level = "bad"; headline = "Pi can't reach the Starlink"; note = "It's on the Starlink WiFi but the dish isn't answering."; }
     else if (!pi.internet) { level = "warn"; headline = "No internet right now"; note = "Clips and status wait until the connection comes back."; }
     else if (onStarlink && d.quality === "weak") { level = "warn"; headline = "Starlink is a little weak"; note = "Trees, bridges or buildings nearby. It should clear up."; }
     else if (onStarlink && d.quality === "down") { level = "warn"; headline = "Starlink is finding satellites"; note = "Usually takes a minute after the car wakes."; }
     else { level = "ok"; headline = cam.uploading ? "Uploading footage" : "Everything's working"; note = `Checked in ${ago(ov.status_at)} · on ${pi.wifi_ssid || "WiFi"}`; }
-    return { s, fresh, pi, d, link, cam, onStarlink, level, headline, note };
+    const usb = cam.usb || {};
+    const carOk = cam.usb_link === "configured";
+    const motion = (s && s.motion) || null;
+    return { s, fresh, pi, d, link, cam, usb, carOk, motion, onStarlink, level, headline, note };
   }
   function qualityBars(d, fresh) {
     if (!fresh || !d.reachable) return 0;
@@ -196,7 +234,8 @@
   function setTitle() {
     document.getElementById("ttl").textContent = TITLES[state.route] || "Car Atlas";
     const { level, fresh } = derive();
-    document.getElementById("tsub").textContent = !state.ov ? "Loading…" : fresh ? (level === "ok" ? "All good" : level === "warn" ? "Heads up" : "Needs attention") + ` · ${ago(state.ov.status_at)}` : "Car asleep or offline";
+    const V = verInfo();
+    document.getElementById("tsub").textContent = (!state.ov ? "Loading…" : fresh ? (level === "ok" ? "All good" : level === "warn" ? "Heads up" : "Needs attention") + ` · ${ago(state.ov.status_at)}` : "Car asleep or offline") + (V.pi ? ` · Pi v${V.pi}${V.behind ? " (update waiting)" : ""}` : "");
     document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === state.route));
   }
   function destroyCharts() { state.charts.forEach((c) => c.destroy()); state.charts = []; }
@@ -262,8 +301,7 @@
     const items = [];
     items.push({ done: !!ov.paired, t: "Connect the Pi", d: "Install Car Atlas on the Pi and link it to this app.", go: "#settings" });
     items.push({ done: !!(D.s && D.s.drive_setup), t: "Connect Google Drive", d: "So clips can upload. One-time step on the Pi.", go: "#settings" });
-    items.push({ done: !!(D.s && D.cam.gadget === "attached"), t: "Dashcam recording to the Pi", d: D.cam.gadget === "unsupported" ? "This Pi can't act as a USB drive yet. Keep a flash drive in the car." : "Shows up once the Pi is installed and the car is awake.", go: "#footage" });
-    items.push({ done: D.d.location_allowed === true, t: "Starlink location on", d: "Starlink app → Advanced → Debug data → allow location on local network. Powers the coverage map.", go: "#map" });
+    items.push({ done: !!(D.s && (D.carOk || D.usb.ever_connected)), t: "Car cable in the Pi's USB0 port", d: "Glovebox USB port → Pi's USB0 (the USB-C at the end of the board, next to the antenna). Take the flash drive out. The car records to the Pi once this turns green.", go: "#footage" });
     items.push({ done: state.pushOn === true, t: "Notifications on", d: standalone() ? "Get alerts when clips upload or something needs you." : "Add Car Atlas to your Home Screen first, then turn them on.", go: "#settings" });
     return items;
   }
@@ -283,7 +321,7 @@
     const ov = state.ov || {};
     const q = qualityBars(D.d, D.fresh && D.onStarlink);
     const cam = D.cam;
-    const camLevel = !D.s ? "" : cam.gadget === "attached" ? "ok" : cam.gadget === "unsupported" || cam.gadget === "error" ? "bad" : "warn";
+    const camLevel = !D.s ? "" : cam.gadget === "attached" ? (D.carOk || !D.fresh ? "ok" : "bad") : cam.gadget === "unsupported" || cam.gadget === "error" ? "bad" : "warn";
     const temp = D.pi.cpu_temp_c;
     const tempLevel = !D.fresh ? "" : temp >= 80 ? "bad" : temp >= 70 ? "warn" : "ok";
     const today = ov.today || {};
@@ -296,7 +334,7 @@
     v.className = "two";
     v.innerHTML = `
       <section class="card hero ${D.level} wide">
-        <div class="row between"><span class="greet">${esc(greet())}</span>
+        <div class="row between"><span class="greet">${esc(greet())}${D.fresh && D.motion ? (D.motion.driving ? ` · <span class="num">${fmtN(D.motion.speed_mph, 0)}</span> mph` : " · Parked") : ""}</span>
           <span class="pill ${D.level === "idle" ? "" : D.level} ${D.fresh ? "live" : ""}">${D.fresh ? "Live" : "Offline"}</span></div>
         <div class="headline">${esc(D.headline)}</div>
         ${chainHtml(D)}
@@ -306,7 +344,7 @@
       <section class="tiles wide">
         <a class="tile ${camLevel}" href="#footage"><span class="stripe"></span>
           <span class="k">${ic("rec")} Dashcam</span>
-          <span class="v">${!D.s ? "—" : cam.gadget === "attached" ? (cam.usb_link === "configured" ? "Recording" : "Ready") : cam.gadget === "unsupported" ? "Not working" : "Checking"}</span>
+          <span class="v">${!D.s ? "—" : cam.gadget === "attached" ? (D.carOk ? "Recording" : D.fresh ? "Not connected" : "Ready") : cam.gadget === "unsupported" ? "Not working" : "Checking"}</span>
           <span class="s">${cam.uploading ? "Uploading now" : pendingN ? `${pendingN} waiting to upload` : `${(ov.counts && (ov.counts.dashcam || 0) + (ov.counts.sentry || 0)) || 0} clips in Drive`}</span></a>
         <a class="tile ${!D.fresh || !D.onStarlink ? "" : q >= 3 ? "ok" : q === 2 ? "warn" : "bad"}" href="#starlink"><span class="stripe"></span>
           <span class="k">${ic("sat")} Starlink</span>
@@ -332,6 +370,8 @@
         <div class="steps">${setup.map((s, i) => `<a class="step ${s.done ? "done" : ""}" href="${s.go}" style="text-decoration:none;color:inherit">
           <span class="n">${s.done ? ic("check", 'style="width:16px;height:16px"') : i + 1}</span>
           <span><div class="t">${esc(s.t)}</div>${s.done ? "" : `<div class="d">${esc(s.d)}</div>`}</span></a>`).join("")}</div></section>` : ""}
+
+      ${(() => { const V = verInfo(); return V.behind ? `<a class="banner warn wide" href="#pi" style="text-decoration:none;color:inherit">${ic("save")}<div><b>Pi update waiting.</b> It's on v${esc(V.pi)}, newest is v${esc(V.latest)}. ${esc(V.fresh ? "Should land in a few minutes." : "Lands next time the car is awake.")}</div></a>` : ""; })()}
 
       <section class="card">
         <div class="card-head"><h2>Latest footage</h2><a class="small" href="#footage">See all</a></div>
@@ -364,6 +404,9 @@
     restart_services: { title: "Restart Pi services?", body: "Restarts the uploader and monitor. The dashcam keeps recording.", yes: "Restart", ok: "Sent." },
     reboot_pi: { title: "Restart the Pi?", body: "The dashcam drive disappears for about a minute while the Pi restarts, so the car can't record during that time. Best done while parked.", yes: "Restart the Pi", danger: true, ok: "Sent. The Pi restarts when it picks this up." },
     test_alert: { ok: "Sent. You'll get a test alert from the Pi in a moment." },
+    usb_rebind: { ok: "Sent. The Pi re-offers the drive to the car (like unplugging and plugging it back in)." },
+    usb_fix: { title: "Try the fallback USB mode?", body: "Only if the cable is already in USB0 and the car still won't connect. The Pi switches USB0 to a different mode and restarts (about 2 minutes, dashcam paused). You can undo it from here.", yes: "Switch and restart", danger: true, ok: "Sent. The Pi restarts with the new USB setting." },
+    usb_fix_undo: { title: "Undo the USB fallback?", body: "Puts USB0 back to the normal setting and restarts the Pi (about 2 minutes).", yes: "Undo and restart", ok: "Sent. The Pi restarts with the normal USB setting." },
   };
   async function runCommand(type, args) {
     const c = CMD_COPY[type] || {};
@@ -407,6 +450,61 @@
     }).join("")}</ul>`;
   }
 
+  // ---------- dashcam USB connection ----------
+  function boardSvg(highlight) {
+    // Orange Pi Zero 2W, top view. Ports along the bottom edge: mini-HDMI, USB1 (middle), USB0 (end, by the antenna).
+    const hl = highlight ? "var(--bad)" : "var(--ok)";
+    return `<svg class="board" viewBox="0 0 340 170" role="img" aria-label="Orange Pi Zero 2W: the car's cable goes in USB0, the USB-C port at the end of the board next to the antenna">
+      <rect x="20" y="22" width="300" height="104" rx="12" fill="color-mix(in srgb, var(--ok) 14%, var(--surface-2))" stroke="var(--line)" stroke-width="2"/>
+      <g fill="var(--muted)" opacity=".55">${Array.from({ length: 20 }, (_, i) => `<circle cx="${52 + i * 12.4}" cy="34" r="2.2"/><circle cx="${52 + i * 12.4}" cy="44" r="2.2"/>`).join("")}</g>
+      <rect x="138" y="62" width="44" height="44" rx="4" fill="var(--ink)" opacity=".75"/>
+      <text x="160" y="88" text-anchor="middle" font-size="9" fill="var(--surface)" font-family="IBM Plex Mono, monospace">CPU</text>
+      <rect x="22" y="62" width="26" height="34" rx="3" fill="var(--surface)" stroke="var(--line)"/>
+      <text x="35" y="112" text-anchor="middle" font-size="9" fill="var(--muted)">SD</text>
+      <circle cx="304" cy="62" r="6" fill="#c9a227" stroke="var(--line)"/>
+      <text x="304" y="82" text-anchor="middle" font-size="9" fill="var(--muted)">antenna</text>
+      <rect x="70" y="114" width="40" height="16" rx="3" fill="var(--surface)" stroke="var(--muted)" stroke-width="1.5"/>
+      <rect x="196" y="114" width="30" height="14" rx="7" fill="var(--surface)" stroke="var(--muted)" stroke-width="1.5"/>
+      <rect class="port-hl" x="258" y="112" width="34" height="18" rx="9" fill="${hl}" opacity=".25"/>
+      <rect x="260" y="114" width="30" height="14" rx="7" fill="var(--surface)" stroke="${hl}" stroke-width="2.5"/>
+      <text x="90" y="148" text-anchor="middle" font-size="11" fill="var(--muted)">mini-HDMI</text>
+      <text x="211" y="148" text-anchor="middle" font-size="11" fill="var(--muted)">USB1</text>
+      <text x="211" y="162" text-anchor="middle" font-size="9.5" fill="var(--muted)">GPS (optional)</text>
+      <text x="275" y="148" text-anchor="middle" font-size="12" font-weight="700" fill="${hl}">USB0</text>
+      <text x="275" y="162" text-anchor="middle" font-size="9.5" font-weight="600" fill="${hl}">car cable</text>
+      <path d="M275 6v12" stroke="${hl}" stroke-width="2.5" stroke-linecap="round"/><path d="M269 12l6 6 6-6" fill="none" stroke="${hl}" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>`;
+  }
+  function usbCard(D) {
+    if (!D.s) return "";
+    const u = D.usb, carOk = D.carOk;
+    const stateTxt = { configured: "Connected", "not attached": "Nothing plugged in", attached: "Plugged in, starting", powered: "Powered, no data yet", default: "Talking, not finished", addressed: "Almost connected", suspended: "Car asleep" }[u.state] || u.state || "Unknown";
+    const showFix = D.fresh && !carOk;
+    return `<section class="card wide">
+      <div class="card-head"><h2>Car connection</h2><span class="pill ${!D.fresh ? "" : carOk ? "ok" : "bad"}">${!D.fresh ? "Offline" : carOk ? "Connected" : "Not connected"}</span></div>
+      ${boardSvg(D.fresh && !carOk)}
+      ${D.fresh && !carOk ? `<div class="banner bad">${ic("usb")}<div>${esc(u.hint || "The car isn't connected to the Pi's USB0 port.")}</div></div>
+        <div class="steps">
+          <div class="step"><span class="n">1</span><span><div class="t">Glovebox USB port → Pi's USB0</div><div class="d">USB0 is the USB-C at the end of the board, next to the gold antenna connector. Only one thing fits that glovebox port, so the flash drive comes out.</div></span></div>
+          <div class="step"><span class="n">2</span><span><div class="t">Use a data cable</div><div class="d">Some USB-C cables only charge. If it still won't connect, swap the cable.</div></span></div>
+          <div class="step"><span class="n">3</span><span><div class="t">Wake the car and wait a minute</div><div class="d">The Pi re-offers the drive on its own once. This card turns green when the car connects.</div></span></div>
+        </div>` : carOk ? `<div class="muted small">The car sees the Pi as its dashcam drive${u.speed && u.speed !== "UNKNOWN" ? ` (${esc(u.speed)})` : ""}. Leave the flash drive out.</div>` : `<div class="muted small">Status shows once the car is awake and the Pi checks in.</div>`}
+      <dl class="kv">
+        <dt>USB link</dt><dd>${esc(stateTxt)}</dd>
+        <dt>Drive offered</dt><dd>${u.bound ? "Yes" : "No"}${u.rebind_tried ? " · retried once" : ""}</dd>
+        <dt>USB0 mode</dt><dd>${esc(u.dr_mode || "—")}${u.otg_fix_installed ? " · fallback on" : ""}</dd>
+        <dt>Drive size</dt><dd>${u.image_gb ? fmtN(u.image_gb, 0, " GB") : "—"}</dd>
+        <dt>Ever connected</dt><dd>${u.ever_connected ? "Yes" : "Not yet"}</dd>
+      </dl>
+      ${u.usb0_host_overlay ? `<div class="banner bad">${ic("alert")}<div>USB0 is set to host mode in orangepi-config (usb0-host). That blocks the car. Turn it off in orangepi-config → System → Hardware.</div></div>` : ""}
+      <div class="row">
+        <button class="btn" style="flex:1" data-cmd="usb_rebind">${ic("refresh")} Re-offer drive</button>
+        ${u.otg_fix_installed ? `<button class="btn" style="flex:1" data-cmd="usb_fix_undo">Undo fallback</button>` : showFix && u.ever_connected === false ? `<button class="btn ghost" style="flex:1" data-cmd="usb_fix">Try fallback mode</button>` : ""}
+      </div>
+      ${(u.image_gb || 0) && u.image_gb < 60 ? `<div class="muted small">Tesla suggests a 64 GB+ drive. This one is ${fmtN(u.image_gb, 0)} GB, sized to fit your SD card. A 128 GB high-endurance microSD in the Pi gives you a full-size drive.</div>` : ""}
+    </section>`;
+  }
+
   // ---------- FOOTAGE ----------
   async function loadClips(reset) {
     if (reset) { state.clips = null; state.clipsDone = false; }
@@ -429,13 +527,14 @@
     else if (cam.gadget === "error") { status = "The dashcam drive hit a problem: " + (cam.detail || "unknown") + "."; cls = "bad"; }
     else if (cam.uploading) status = `Uploading ${cam.uploading.kind === "sentry" ? "a Sentry event" : "a dashcam clip"} (${cam.uploading.mb} MB)…`;
     else if (cam.waiting_for) { status = "Clips are waiting for " + cam.waiting_for + "."; cls = "warn"; }
-    else status = cam.gadget === "attached" ? "Ready. Saved clips and Sentry events upload on their own." : "Checking the dashcam drive…";
+    else if (cam.gadget === "attached" && !D.carOk && D.fresh) { status = "The Pi is offering the drive, but the car hasn't connected to it. See “Car connection” below."; cls = "bad"; }
+    else status = cam.gadget === "attached" ? (D.carOk ? "Car is recording to the Pi. Saved clips and Sentry events upload on their own." : "Ready. Saved clips and Sentry events upload on their own.") : "Checking the dashcam drive…";
 
     v.className = "two";
     v.innerHTML = `
       <section class="card wide">
         <div class="card-head"><h2>Dashcam drive</h2>
-          <span class="pill ${cam.gadget === "attached" ? "ok" : cam.gadget === "unsupported" || cam.gadget === "error" ? "bad" : ""}">${cam.gadget === "attached" ? (cam.usb_link === "configured" ? "Car connected" : "Ready") : cam.gadget === "unsupported" ? "Not supported" : D.s ? "Checking" : "Offline"}</span></div>
+          <span class="pill ${cam.gadget === "attached" ? (D.carOk || !D.fresh ? "ok" : "bad") : cam.gadget === "unsupported" || cam.gadget === "error" ? "bad" : ""}">${cam.gadget === "attached" ? (D.carOk ? "Car connected" : D.fresh ? "Car not connected" : "Ready") : cam.gadget === "unsupported" ? "Not supported" : D.s ? "Checking" : "Offline"}</span></div>
         <div class="banner ${cls}">${ic(cls === "bad" ? "alert" : cam.uploading ? "upload" : "rec")}<div>${esc(status)}</div></div>
         ${cam.uploading ? `<div class="meter indet"><span></span></div>` : ""}
         <div class="stats">
@@ -444,9 +543,11 @@
           <div class="stat"><div class="k">Uploaded</div><div class="v">${fmtN((counts.total_mb || 0) / 1000, 1, " GB")}</div></div>
           <div class="stat"><div class="k">Over Starlink today</div><div class="v">${fmtN(cam.starlink_uploaded_today_mb, 0, " MB")}</div></div>
         </div>
-        <div><div class="row between small"><span class="muted">Drive space on the Pi</span><span class="num">${img.used_pct !== undefined ? `${img.used_pct}% used · ${img.free_gb} GB free` : "—"}</span></div>
+        <div><div class="row between small"><span class="muted">Drive space on the Pi</span><span class="num">${img.used_pct !== undefined ? `${img.used_pct}% used · ${img.free_gb} of ${img.size_gb} GB free` : D.usb.image_gb ? `${D.usb.image_gb} GB drive` : "—"}</span></div>
         <div class="meter" style="margin-top:6px"><span style="width:${img.used_pct || 0}%;background:${(img.used_pct || 0) >= 85 ? "var(--bad)" : (img.used_pct || 0) >= 70 ? "var(--warn)" : "var(--accent)"}"></span></div></div>
       </section>
+
+      ${usbCard(D)}
 
       <section class="card">
         <div class="card-head"><h2>Save recent footage</h2></div>
@@ -471,6 +572,7 @@
       </section>`;
 
     document.getElementById("fSave").onclick = saveRecentSheet;
+    v.querySelectorAll("[data-cmd]").forEach((b) => b.onclick = () => runCommand(b.dataset.cmd));
     v.querySelectorAll("[data-k]").forEach((b) => b.onclick = async () => {
       state.footKind = b.dataset.k;
       v.querySelectorAll("[data-k]").forEach((x) => x.classList.toggle("on", x === b));
@@ -549,7 +651,6 @@
           ${gauge(D.fresh && D.onStarlink ? d.obstructed_pct : null, 20, "Sky blocked", "%", true, 3, 10)}
         </div>
         ${(d.alerts || []).length && D.fresh ? `<div class="banner warn">${ic("alert")}<div>Dish says: ${esc(d.alerts.map((a) => a.replace(/_/g, " ")).join(", "))}</div></div>` : ""}
-        ${d.location_allowed === false ? `<div class="banner">${ic("pin")}<div>Turn on location in the Starlink app (Advanced → Debug data → allow on local network) to build your coverage map.</div></div>` : ""}
       </section>
 
       <section class="card wide">
@@ -574,7 +675,7 @@
           <dt>Speed right now</dt><dd>${fmtN(d.down_mbps, 1)} ↓ / ${fmtN(d.up_mbps, 1)} ↑ Mbps</dd>
           <dt>GPS satellites</dt><dd>${fmtN(d.gps_sats)}</dd>
           <dt>On for</dt><dd>${dur(d.uptime_s)}</dd>
-          <dt>Location sharing</dt><dd>${d.location_allowed === true ? "On" : d.location_allowed === false ? "Off" : "—"}</dd>
+          <dt>Dish location</dt><dd>${d.location ? "Shared" : d.location_supported === false ? "Not shared by Starlink" : "—"}</dd>
           <dt>Firmware</dt><dd>${esc(d.software || "—")}</dd>
           <dt>Hardware</dt><dd>${esc(d.hardware || "—")}</dd>
         </dl>
@@ -617,8 +718,11 @@
   async function renderMap(v) {
     const D = derive();
     const ov = state.ov || {};
-    const loc = (D.d && D.d.location) || (ov.last_location && { lat: ov.last_location.lat, lon: ov.last_location.lon });
-    const locAt = D.d && D.d.location ? ov.status_at : ov.last_location && ov.last_location.ts;
+    const L0 = ov.last_location;
+    const loc = L0 && L0.lat !== null && L0.lat !== undefined ? { lat: L0.lat, lon: L0.lon } : null;
+    const locAt = L0 && L0.ts;
+    const gps = (D.s && D.s.gps) || {};
+    const hasGps = !!gps.device;
     v.innerHTML = `
       <div class="row between">
         <div class="chips">${[[1, "Today"], [7, "Week"], [30, "Month"], [365, "Year"]].map(([d, l]) => `<button class="chip ${state.mapDays === d ? "on" : ""}" data-d="${d}">${l}</button>`).join("")}</div>
@@ -633,9 +737,19 @@
           <span class="row small" style="gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:var(--warn)"></span>Weak</span>
           <span class="row small" style="gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:var(--bad)"></span>Dropped</span>
         </div>
-        <div class="muted small">Each dot is a spot you've driven, colored by how the Starlink did there. ${loc ? `Car last seen ${esc(ago(locAt))}.` : "The car's spot shows once Starlink location sharing is on."}</div>
+        <div class="row small" style="gap:16px"><span class="row" style="gap:6px"><span class="pin-dot sentry"></span>Sentry event</span><span class="row" style="gap:6px"><span class="pin-dot dashcam"></span>Saved clip</span></div>
+        <div class="muted small">Dots are spots you've driven, colored by how the Starlink did there. Pins are your saved clips and Sentry events (from the car's own location data). ${loc ? `Car last seen ${esc(ago(locAt))}${L0.source === "gps" ? " (USB GPS)" : ""}.` : ""}</div>
         ${loc ? `<a class="btn block" href="https://maps.apple.com/?ll=${loc.lat},${loc.lon}&q=My%20Model%20Y" target="_blank" rel="noopener">${ic("ext")} Open car location in Maps</a>` : ""}
-      </section>`;
+      </section>
+      ${hasGps ? `<section class="card"><div class="card-head"><h2>USB GPS</h2><span class="pill ${gps.fix ? "ok" : "warn"}">${gps.fix ? "Locked on" : "Searching"}</span></div>
+        <div class="muted small">${gps.fix ? `${fmtN(gps.sats)} satellites. Coverage dots and Find my car come from this.` : "Plugged in. It needs a view of the sky; the first lock can take a few minutes."}</div></section>` :
+        `<section class="card"><div class="card-head"><h2>Want live location?</h2><span class="pill">Optional</span></div>
+        <div class="banner">${ic("gps")}<div>Starlink stopped sharing the dish's location with devices on its WiFi in May 2026, so the coverage dots and Find my car need a small USB GPS on the Pi.</div></div>
+        <div class="steps">
+          <div class="step"><span class="n">1</span><span><div class="t">Get a USB GPS (about $15)</div><div class="d">Any “u-blox 7” or “VK-162” USB GPS stick works. Plus a USB-C to USB-A adapter (OTG).</div></span></div>
+          <div class="step"><span class="n">2</span><span><div class="t">Plug it into the Pi's USB1</div><div class="d">The middle USB-C port. USB0 stays for the car cable.</div></span></div>
+          <div class="step"><span class="n">3</span><span><div class="t">That's it</div><div class="d">The Pi finds it on its own. This card turns into a GPS status card, and dots start showing as you drive.</div></span></div>
+        </div></section>`}`;
 
     v.querySelectorAll("[data-d]").forEach((b) => b.onclick = () => { state.mapDays = Number(b.dataset.d); render(); });
     document.getElementById("onlyBad").onclick = () => { state.mapProblems = !state.mapProblems; render(); };
@@ -652,7 +766,7 @@
     }
     document.getElementById("findCar").onclick = () => {
       if (carMarker) { map.flyTo(carMarker.getLatLng(), 16, { duration: .8 }); carMarker.openPopup(); }
-      else toast("No car location yet. Turn on location in the Starlink app.");
+      else toast("No car location yet. A USB GPS on the Pi adds this (see below).");
     };
     try {
       const r = await api(`/api/coverage?days=${state.mapDays}`);
@@ -672,6 +786,18 @@
       if (bounds.length && (state.focusCar !== true || !carMarker)) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
       if (state.focusCar && carMarker) { map.setView(carMarker.getLatLng(), 16); carMarker.openPopup(); }
       state.focusCar = false;
+      // Clip pins (Sentry / saved clips) from the car's own event location
+      api(`/api/clip-pins?days=${Math.max(state.mapDays, 30)}`).then((cp) => {
+        if (state.map !== map || !cp.pins.length) return;
+        const pinBounds = [];
+        cp.pins.forEach((c) => {
+          pinBounds.push([c.lat, c.lon]);
+          const d = folderDate(c.folder);
+          L.marker([c.lat, c.lon], { icon: L.divIcon({ className: "", html: `<div class="pin-dot ${c.kind === "sentry" ? "sentry" : "dashcam"}"></div>`, iconSize: [16, 16], iconAnchor: [8, 8] }) })
+            .addTo(map).bindPopup(`<b>${esc(reasonText(c))}</b><br>${esc(friendlyDate(d) || ago(c.uploaded_at))}${c.city ? " · " + esc(c.city) : ""}<br><a href="${esc(c.drive_url || DRIVE[c.kind] || DRIVE.root)}" target="_blank" rel="noopener">Open in Drive</a>`);
+        });
+        if (!bounds.length && !carMarker && pinBounds.length) map.fitBounds(pinBounds, { padding: [30, 30], maxZoom: 15 });
+      }).catch(() => {});
     } catch { document.getElementById("mapStats").textContent = "Couldn't load the map data."; }
   }
 
@@ -696,10 +822,13 @@
           <dt>On for</dt><dd>${dur(pi.uptime_s)}</dd>
           <dt>SD card free</dt><dd>${fmtN(pi.sd_free_gb, 1, " GB")}</dd>
           <dt>Tailscale</dt><dd>${esc(pi.tailscale_ip || "—")}</dd>
-          <dt>Code version</dt><dd>${esc(pi.code_version || "—")}</dd>
+          <dt>Version</dt><dd>${pi.version ? "v" + esc(pi.version) : state.ov && state.ov.versions && state.ov.versions.pi ? "v" + esc(state.ov.versions.pi) : "—"} ${pi.code_version ? `<span class="muted">(${esc(pi.code_version)})</span>` : ""}</dd>
+          <dt>Time zone</dt><dd>${esc(pi.timezone || "—")}</dd>
           <dt>Last check-in</dt><dd>${esc(ago(state.ov && state.ov.status_at))}</dd>
         </dl>
       </section>
+
+      ${softwareCard()}
 
       <section class="card">
         <div class="card-head"><h2>Temperature</h2><div class="chips">${[[24, "24h"], [168, "7d"]].map(([h, l]) => `<button class="chip ${state.stRange === h ? "on" : ""}" data-h="${h}">${l}</button>`).join("")}</div></div>
@@ -742,6 +871,7 @@
 
     v.querySelectorAll("[data-cmd]").forEach((b) => b.onclick = () => runCommand(b.dataset.cmd));
     v.querySelectorAll("[data-h]").forEach((b) => b.onclick = () => { state.stRange = Number(b.dataset.h); render(); });
+    bindSoftware(v);
     try {
       const h = await api(`/api/history?hours=${state.stRange >= 168 ? 168 : 24}`);
       if (state.route !== "pi") return;
@@ -751,6 +881,78 @@
         options: chartOpts("", { y: { beginAtZero: false, suggestedMin: 30, suggestedMax: 85 } }),
       }));
     } catch {}
+  }
+
+  // ---------- versions / software ----------
+  function softwareCard() {
+    const V = verInfo();
+    const u = V.upd || {};
+    const lastCheck = u.checked_at ? `${{ "up-to-date": "Up to date", updated: `Updated v${u.from} → v${u.to}`, offline: "Couldn't reach GitHub" }[u.result] || u.result} · ${ago(u.checked_at)}` : "—";
+    return `<section class="card wide" id="swCard">
+      <div class="card-head"><h2>Software</h2><span class="pill ${V.level}">${esc(V.text)}</span></div>
+      <div class="vers">
+        <div class="vbox ${V.behind ? "warn" : V.level === "ok" ? "ok" : ""}"><div class="k">Pi is running</div><div class="v num">${V.pi ? "v" + esc(V.pi) : "—"}</div><div class="s">${V.pi_reported_at ? "reported " + esc(ago(V.pi_reported_at)) : "not reported yet"}</div></div>
+        <div class="varrow" aria-hidden="true">${V.behind ? "→" : V.level === "ok" ? "=" : ""}</div>
+        <div class="vbox"><div class="k">Should be on</div><div class="v num">${V.latest ? "v" + esc(V.latest) : "—"}</div><div class="s">${V.latest_checked_at ? "newest release · checked " + esc(ago(V.latest_checked_at)) : "newest release"}</div></div>
+      </div>
+      ${V.behind ? `<div class="banner warn">${ic("save")}<div>${esc(V.note)}</div></div>` : ""}
+      <dl class="kv">
+        <dt>Pi code</dt><dd>${esc(V.pi_sha || "—")}</dd>
+        <dt>Pi's last update check</dt><dd>${esc(lastCheck)}</dd>
+        <dt>This app</dt><dd>v${esc(APP_VERSION)}${V.app && V.app !== APP_VERSION ? ` (server v${esc(V.app)})` : ""}</dd>
+      </dl>
+      <div class="row">
+        <button class="btn ${V.behind ? "primary" : ""}" style="flex:1" data-cmd="update_now">${ic("refresh")} ${V.behind ? "Update now" : "Check for updates"}</button>
+        <button class="btn" style="flex:1" data-whatsnew>${ic("star")} What's new</button>
+      </div>
+      <div class="muted small">The Pi checks for updates right after it turns on and every 30 minutes. Updates never interrupt the dashcam.</div>
+    </section>`;
+  }
+  function bindSoftware(root) {
+    root.querySelectorAll("[data-whatsnew]").forEach((b) => b.onclick = whatsNew);
+  }
+  function mdLite(md) {
+    // Tiny markdown: "## heading", "- bullet" (with wrapped lines), `code`
+    const out = [];
+    let li = null;
+    const flush = () => { if (li !== null) { out.push(`<li>${li}</li>`); li = null; } };
+    const inline = (t) => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>");
+    let inList = false;
+    for (const raw of String(md || "").split("\n")) {
+      const line = raw.trimEnd();
+      if (/^#\s/.test(line)) continue;
+      if (/^##\s/.test(line)) { flush(); if (inList) { out.push("</ul>"); inList = false; } out.push(`<h3>${inline(line.replace(/^##\s*/, ""))}</h3>`); continue; }
+      if (/^\s*-\s/.test(line)) { flush(); if (!inList) { out.push("<ul>"); inList = true; } li = inline(line.replace(/^\s*-\s*/, "")); continue; }
+      if (line.trim() && li !== null) { li += " " + inline(line.trim()); continue; }
+      flush();
+    }
+    flush(); if (inList) out.push("</ul>");
+    return out.join("");
+  }
+  async function whatsNew() {
+    const close = sheet(`<h2>What's new</h2><div class="changelog"><div class="skeleton" style="min-height:120px"></div></div>
+      <button class="btn block" data-close>Close</button>`, (el, c) => { el.querySelector("[data-close]").onclick = c; });
+    try {
+      const r = await api("/api/changelog");
+      const box = document.querySelector(".sheet .changelog");
+      if (box) box.innerHTML = r.text ? mdLite(r.text) : `<div class="muted">Couldn't load the notes right now.</div>`;
+    } catch { const box = document.querySelector(".sheet .changelog"); if (box) box.innerHTML = `<div class="muted">Couldn't load the notes right now.</div>`; }
+    return close;
+  }
+  // When the server is running a newer app than this page, offer a one-tap reload.
+  function checkAppUpdate() {
+    const sv = state.ov && state.ov.app_version;
+    if (!sv || cmpVer(sv, APP_VERSION) <= 0 || state.appUpdateShown) return;
+    state.appUpdateShown = true;
+    const bar = document.createElement("button");
+    bar.className = "update-bar";
+    bar.innerHTML = `${ic("star")}<span>Car Atlas v${esc(sv)} is ready. Tap to update.</span>`;
+    bar.onclick = async () => {
+      bar.disabled = true;
+      try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch {}
+      location.reload();
+    };
+    document.body.append(bar);
   }
 
   // ---------- SETTINGS ----------
@@ -826,6 +1028,16 @@
       </section>
 
       <section class="card">
+        <div class="card-head"><h2>About</h2>${(() => { const V = verInfo(); return `<span class="pill ${V.level}">${esc(V.behind ? "Pi update waiting" : V.level === "ok" ? "All up to date" : V.text)}</span>`; })()}</div>
+        <dl class="kv">
+          <dt>App</dt><dd>v${esc(APP_VERSION)}</dd>
+          <dt>Pi</dt><dd>${(() => { const V = verInfo(); return V.pi ? "v" + esc(V.pi) : "—"; })()}</dd>
+          <dt>Newest release</dt><dd>${(() => { const V = verInfo(); return V.latest ? "v" + esc(V.latest) : "—"; })()}</dd>
+        </dl>
+        <div class="row"><button class="btn" style="flex:1" data-whatsnew>${ic("star")} What's new</button><a class="btn" style="flex:1" href="#pi">${ic("cpu")} Pi software</a></div>
+      </section>
+
+      <section class="card">
         <div class="card-head"><h2>Account</h2></div>
         <div class="row">
           <button class="btn" style="flex:1" id="logout">${ic("out")} Sign out</button>
@@ -858,6 +1070,7 @@
         e.target.reset();
       } catch (er) { if (er.message !== "auth") toast(er.message); }
     };
+    bindSoftware(v);
     document.getElementById("logout").onclick = async () => { await api("/api/logout", { method: "POST", body: {} }).catch(() => {}); state.authed = false; renderLogin(); };
     document.getElementById("logoutAll").onclick = async () => {
       if (!(await confirmSheet({ title: "Sign out everywhere?", body: "Every phone and browser will need the password again, including yours.", yes: "Sign out all", danger: true }))) return;
@@ -912,6 +1125,7 @@
     btn && btn.classList.add("spin");
     try {
       state.ov = await api("/api/overview");
+      checkAppUpdate();
       const busy = document.querySelector(".scrim") || (document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName));
       if (!busy) {
         if (manual || state.route === "home") render();
@@ -940,7 +1154,7 @@
     } catch { state.authed = false; }
     if (!state.authed) return renderLogin();
     renderShell();
-    try { state.ov = await api("/api/overview"); } catch {}
+    try { state.ov = await api("/api/overview"); checkAppUpdate(); } catch {}
     pushStatus().then((ps) => { state.pushOn = !!ps.on; if (state.route === "home") render(); });
     route();
   }
