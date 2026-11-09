@@ -182,6 +182,24 @@ def meters(a, b) -> float:
     return 6371000 * math.hypot(x, lat2 - lat1)
 
 
+def prefer_home_wifi(cfg, net: str, state: dict) -> None:
+    """NetworkManager won't leave a working network for a better one on its own.
+    When the Pi is on Starlink and home WiFi is in range, hop to home WiFi."""
+    if net != "starlink" or time.time() - state.get("last_try", 0) < 120:
+        return
+    home = cfg.get("HOME_SSID")
+    code, out = run(["nmcli", "-t", "-f", "SSID,SIGNAL", "dev", "wifi", "list"], timeout=15)
+    if code != 0:
+        return
+    for line in out.splitlines():
+        ssid, _, sig = line.rpartition(":")
+        if ssid == home and sig.isdigit() and int(sig) >= 35:
+            state["last_try"] = time.time()
+            log(C, f"home WiFi in range ({sig}); switching off Starlink")
+            run(["nmcli", "connection", "up", "home-wifi"], timeout=45)
+            return
+
+
 def main() -> None:
     cfg = load_config()
     dish = Dish()
@@ -193,6 +211,7 @@ def main() -> None:
     last_point_ts = 0.0
     last_sample_ts = 0.0
     boot_alerted = False
+    home_state: dict = {}
     log(C, "started")
     while True:
         loop_start = time.time()
@@ -200,6 +219,7 @@ def main() -> None:
             cfg = load_config()
             wifi = wifi_info()
             net = network_kind(cfg, wifi["ssid"])
+            prefer_home_wifi(cfg, net, home_state)
             d = dish.poll() if net == "starlink" else dict(dish.last, reachable=False, error="Pi is not on the Starlink WiFi")
             q = quality(d)
             synced = clock_synced()
