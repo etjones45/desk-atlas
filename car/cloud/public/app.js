@@ -643,8 +643,7 @@
     if (typeof L === "undefined") { document.getElementById("mapStats").textContent = "Map couldn't load. Check your connection."; return; }
     const map = L.map("leaf", { zoomControl: false, attributionControl: true, preferCanvas: true });
     state.map = map;
-    const tiles = isDark() ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-    L.tileLayer(tiles, { maxZoom: 19, subdomains: "abcd", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' }).addTo(map);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, className: isDark() ? "tiles-dark" : "", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
     map.setView(loc ? [loc.lat, loc.lon] : [40.364, -111.738], loc ? 14 : 11);
     let carMarker = null;
     if (loc) {
