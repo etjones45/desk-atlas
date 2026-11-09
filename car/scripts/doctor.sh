@@ -29,7 +29,7 @@ else
   echo "            (USB1, the middle port, is host-only, so the car can't see a drive through it.)"
   echo "         -> The car must be awake. Try a different cable if it still won't connect."
 fi
-DR=$(tr -d '\0' < /sys/firmware/devicetree/base/soc/usb@5100000/dr_mode 2>/dev/null)
+DR=$(tr -d '\0' 2>/dev/null < /sys/firmware/devicetree/base/soc/usb@5100000/dr_mode)
 info "USB0 mode: ${DR:-unknown}   controllers: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')"
 if grep -E '^(overlays|user_overlays)=' /boot/orangepiEnv.txt 2>/dev/null | grep -q 'usb0-host'; then
   bad "orangepi-config has USB0 set to HOST mode (usb0-host overlay). Remove it so the car can see the drive."
@@ -60,6 +60,6 @@ if grep -q '^CLOUD_KEY=' /etc/car-atlas/config.env 2>/dev/null; then ok "Linked 
 else bad "Not linked to the app yet: make a code in the app (Settings -> Connect the Pi), then run  sudo car-atlas pair CODE"; fi
 
 echo "-- Pi"
-info "Temp: $(awk '{printf "%.1f C", $1/1000}' /sys/class/thermal/thermal_zone0/temp)   CPU: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)   SD free: $(df -h / | awk 'NR==2{print $4}')   Time zone: $(cat /etc/timezone 2>/dev/null)"
+info "Temp: $(awk '{printf "%.1f C", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null)   CPU: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)   SD free: $(df -h / | awk 'NR==2{print $4}')   Time zone: $(cat /etc/timezone 2>/dev/null)"
 UP=$(cat /run/car-atlas/uploader.json 2>/dev/null)
 [ -n "$UP" ] && info "Uploader: $(echo "$UP" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("pending",d.get("pending"),"| waiting for",d.get("waiting_for"),"| last upload",(d.get("last_upload") or {}).get("folder"))' 2>/dev/null)"
