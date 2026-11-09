@@ -153,7 +153,7 @@
     let level = "idle", headline = "Waiting for the Pi", note = "";
     if (!ov.paired) { level = "idle"; headline = "Let's connect your Pi"; note = "Finish setup below and live status shows up here."; }
     else if (!s) { level = "idle"; headline = "Pi is connected"; note = "Waiting for its first check-in. Wake the car so the Pi turns on."; }
-    else if (!fresh) { level = "idle"; headline = "Car is asleep"; note = `Last check-in ${ago(ov.status_at)}. The Pi turns off when the car sleeps, so this is normal when parked.`; }
+    else if (!fresh) { level = "idle"; headline = "Car is asleep"; note = `Last check-in ${ago(ov.status_at)}. The Pi is off while the car sleeps. With Sentry Mode on, the car stays awake and so does the Pi.`; }
     else if (cam.gadget === "unsupported" || cam.gadget === "error") { level = "bad"; headline = "Dashcam isn't recording to the Pi"; note = "Keep a USB flash drive in the car until this is fixed."; }
     else if (onStarlink && !link.pi_talking_to_dish) { level = "bad"; headline = "Pi can't reach the Starlink"; note = "It's on the Starlink WiFi but the dish isn't answering."; }
     else if (!pi.internet) { level = "warn"; headline = "No internet right now"; note = "Clips and status wait until the connection comes back."; }
