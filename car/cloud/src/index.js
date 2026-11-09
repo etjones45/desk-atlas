@@ -101,7 +101,7 @@ async function latestVersion(env, ctx, force = false) {
   if (!force && cached && now() - at < 600) return { version: cached, checked_at: at };
   const refresh = (async () => {
     try {
-      const r = await fetch(`${REPO_RAW}/VERSION?t=${Math.floor(now() / 300)}`, { cf: { cacheTtl: 120 } });
+      const r = await fetch(`${REPO_RAW}/VERSION?t=${Math.floor(now() / 120)}`, { cf: { cacheTtlByStatus: { "200-299": 120, "404": 0, "500-599": 0 } } });
       if (!r.ok) throw new Error(`GitHub ${r.status}`);
       const v = (await r.text()).trim();
       if (!/^\d+(\.\d+){0,3}$/.test(v)) throw new Error("bad VERSION");
@@ -237,7 +237,7 @@ async function handleApp(req, env, ctx, url, path) {
     const at = Number(await kvGet(env, "changelog_at")) || 0;
     if (!text || now() - at > 3600) {
       try {
-        const r = await fetch(`${REPO_RAW}/CHANGELOG.md?t=${Math.floor(now() / 3600)}`, { cf: { cacheTtl: 600 } });
+        const r = await fetch(`${REPO_RAW}/CHANGELOG.md?t=${Math.floor(now() / 600)}`, { cf: { cacheTtlByStatus: { "200-299": 600, "404": 0, "500-599": 0 } } });
         if (r.ok) {
           text = (await r.text()).slice(0, 20000);
           await kvSet(env, "changelog", text);

@@ -17,7 +17,7 @@ set +a
 
 IMG="${TESLACAM_IMAGE:-/var/lib/car-atlas/teslacam.img}"
 SIZE_SETTING="${TESLACAM_SIZE_GB:-auto}"
-RESERVE_GB=4
+RESERVE_GB=5
 G=/sys/kernel/config/usb_gadget/teslacam
 STATE=/run/car-atlas/gadget.json
 mkdir -p /run/car-atlas "$(dirname "$IMG")"

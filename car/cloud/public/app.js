@@ -235,7 +235,7 @@
     document.getElementById("ttl").textContent = TITLES[state.route] || "Car Atlas";
     const { level, fresh } = derive();
     const V = verInfo();
-    document.getElementById("tsub").textContent = (!state.ov ? "Loading…" : fresh ? (level === "ok" ? "All good" : level === "warn" ? "Heads up" : "Needs attention") + ` · ${ago(state.ov.status_at)}` : "Car asleep or offline") + (V.pi ? ` · Pi v${V.pi}${V.behind ? " (update waiting)" : ""}` : "");
+    document.getElementById("tsub").textContent = (!state.ov ? "Loading…" : fresh ? (level === "ok" ? "All good" : level === "warn" ? "Heads up" : "Needs attention") + ` · ${ago(state.ov.status_at)}` : "Car asleep or offline") + (V.pi ? (V.behind ? " · Pi update waiting" : ` · v${V.pi}`) : "");
     document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === state.route));
   }
   function destroyCharts() { state.charts.forEach((c) => c.destroy()); state.charts = []; }
@@ -839,7 +839,7 @@
       <section class="card">
         <div class="card-head"><h2>What's running</h2></div>
         <ul class="list">
-          ${[["car-atlas-teslacam", "Dashcam drive", cam.gadget === "attached" ? "Car can record" : cam.gadget === "unsupported" ? "Not supported on this Pi" : cam.gadget || "—"],
+          ${[["car-atlas-teslacam", "Dashcam drive", cam.gadget === "attached" ? (D.carOk ? "Car is recording to it" : "Offered, car not connected yet") : cam.gadget === "unsupported" ? "Not supported on this Pi" : cam.gadget || "—"],
              ["car-atlas-uploader", "Clip uploader", cam.waiting_for ? "Waiting for " + cam.waiting_for : cam.uploading ? "Uploading" : "Watching for clips"],
              ["car-atlas-monitor", "Starlink + health monitor", "Checking every 15 s"],
              ["tailscaled", "Tailscale (remote access)", pi.tailscale_ip || ""]].map(([k, name, sub]) => {
@@ -946,7 +946,7 @@
     state.appUpdateShown = true;
     const bar = document.createElement("button");
     bar.className = "update-bar";
-    bar.innerHTML = `${ic("star")}<span>Car Atlas v${esc(sv)} is ready. Tap to update.</span>`;
+    bar.innerHTML = `${ic("star")}<span>App v${esc(sv)} is ready · tap to update</span>`;
     bar.onclick = async () => {
       bar.disabled = true;
       try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch {}

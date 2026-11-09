@@ -248,6 +248,11 @@ class UsbWatch:
                 alert(cfg, "Car isn't seeing the dashcam drive",
                       "The Pi is on but the car hasn't connected to it. Check the cable is in the Pi's USB0 port.",
                       key="car-not-connected", cooldown_s=6 * 3600, tags="rotating_light")
+            elif waited > 240 and uptime > 300 and not self.ever_connected:
+                alert(cfg, "Car hasn't connected to the dashcam drive yet",
+                      "The Pi is on and offering the drive, but the car isn't connected. The glovebox cable must go "
+                      "into the Pi's USB0 port (end of the board, next to the antenna). Keep the flash drive in until then.",
+                      key="car-never-connected", cooldown_s=12 * 3600, tags="rotating_light")
         info["hint"] = usb_hint(usb, uptime)
         info["ever_connected"] = self.ever_connected
         info["connected_this_boot"] = self.connected_this_boot

@@ -272,8 +272,8 @@ main#view { padding: 14px 16px calc(var(--tabbar-h) + env(safe-area-inset-bottom
 .pin-dot { width: 14px; height: 14px; border-radius: 4px; transform: rotate(45deg); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); flex: none; display: inline-block; }
 .pin-dot.sentry { background: var(--bad); }
 .pin-dot.dashcam { background: var(--accent); }
-.update-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 14px); z-index: 60; display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 99px; border: 0; background: var(--accent); color: #fff; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; max-width: calc(100vw - 24px); animation: upbar .3s ease; }
-@keyframes upbar { from { transform: translate(-50%, 40px); opacity: 0; } }
+.update-bar { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 68px); z-index: 70; white-space: nowrap; display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 99px; border: 0; background: var(--accent); color: #fff; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; max-width: calc(100vw - 24px); animation: upbar .3s ease; }
+@keyframes upbar { from { transform: translate(-50%, -20px); opacity: 0; } }
 .update-bar svg { width: 20px; height: 20px; flex: none; }
 .changelog { max-height: 60vh; overflow-y: auto; font-size: 14px; }
 .changelog h3 { margin: 12px 0 4px; }
@@ -282,3 +282,4 @@ main#view { padding: 14px 16px calc(var(--tabbar-h) + env(safe-area-inset-bottom
 .changelog code { font-family: var(--font-num); font-size: 12.5px; background: var(--surface-2); padding: 1px 5px; border-radius: 6px; }
 a.banner { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { .board .port-hl, .update-bar { animation: none !important; } }
+.topbar .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

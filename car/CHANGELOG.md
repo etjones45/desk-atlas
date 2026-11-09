@@ -17,7 +17,9 @@
 - New commands: `car-atlas version`, `car-atlas usb-fix` (fallback USB mode, with undo).
 - The drive image is built and read even where the system can't see its partition (offset fallback, and mtools
   as a backup reader). The drive is never resized or checked while the car is using it.
-- Alerts if the dashcam drive can't be set up at boot, and when the Pi finishes an update.
+- Alerts if the dashcam drive can't be set up at boot, if the car never connects to it, and when the Pi
+  finishes an update.
+- The Pi updates itself within minutes when the app says a newer version exists (not just every 30 min).
 
 ## 1.0 (2026-11-08)
 - First release: dashcam USB drive, Google Drive uploads, Starlink monitor, coverage map, car.etjarvis.com app,
