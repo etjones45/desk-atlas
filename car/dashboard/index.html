@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Car Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: one phone-width column of status panels, summary first, each panel owns its own error state. */
+:root {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --ink: #141a22;
+  --muted: #5d6877;
+  --line: #dde2ea;
+  --accent: #2563eb;
+  --ok: #138a52;
+  --warn: #b26a00;
+  --bad: #c62828;
+  --ok-bg: #e5f5ec;
+  --warn-bg: #fff2dc;
+  --bad-bg: #fde8e8;
+  --idle-bg: #eceff4;
+  --font-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117; --panel: #151b24; --ink: #e7ecf3; --muted: #93a0b2; --line: #263040;
+    --accent: #6b9bff; --ok: #3ccf8a; --warn: #f0a83a; --bad: #ff6b6b;
+    --ok-bg: #11291e; --warn-bg: #2d2210; --bad-bg: #321617; --idle-bg: #1d2531;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117; --panel: #151b24; --ink: #e7ecf3; --muted: #93a0b2; --line: #263040;
+  --accent: #6b9bff; --ok: #3ccf8a; --warn: #f0a83a; --bad: #ff6b6b;
+  --ok-bg: #11291e; --warn-bg: #2d2210; --bad-bg: #321617; --idle-bg: #1d2531;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); }
+.wrap { max-width: 720px; margin: 0 auto; padding: 18px 16px 48px; display: grid; gap: 14px; }
+h1, h2 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: .2px; }
+h2 { font-size: 19px; font-weight: 600; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sub { color: var(--muted); font-size: 13px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 10px; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--idle-bg); color: var(--muted); white-space: nowrap; }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.hero { border-left: 5px solid var(--line); }
+.hero.ok { border-left-color: var(--ok); }
+.hero.warn { border-left-color: var(--warn); }
+.hero.bad { border-left-color: var(--bad); }
+.hero-line { font-family: var(--font-display); font-size: 22px; font-weight: 600; }
+.chain { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 14px; }
+.node { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); font-weight: 500; }
+.node.ok { border-color: var(--ok); color: var(--ok); }
+.node.bad { border-color: var(--bad); color: var(--bad); }
+.node.idle { color: var(--muted); }
+.link { width: 22px; height: 2px; background: var(--line); }
+.link.ok { background: var(--ok); }
+.link.bad { background: var(--bad); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+.stat { background: var(--bg); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.stat .k { font-size: 12px; color: var(--muted); }
+.stat .v { font-family: var(--font-num); font-size: 16px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.note { font-size: 13px; color: var(--muted); }
+.msg { font-size: 14px; padding: 9px 11px; border-radius: 8px; background: var(--bg); }
+.msg.warn { background: var(--warn-bg); color: var(--ink); }
+.msg.bad { background: var(--bad-bg); color: var(--ink); }
+.links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+@media (max-width: 420px) { .links { grid-template-columns: 1fr; } }
+a.btn, button.btn { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--accent); color: var(--accent); background: transparent; font: 600 14px var(--font-body); text-decoration: none; cursor: pointer; text-align: center; }
+button.btn.primary { background: var(--accent); color: #fff; }
+a.btn:focus-visible, button.btn:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button.btn:disabled { opacity: .55; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+select { min-height: 44px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: 14px var(--font-body); padding: 0 10px; }
+ul.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+ul.list li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; background: var(--bg); border-radius: 8px; font-size: 14px; }
+ul.list li a { color: var(--accent); text-decoration: none; font-family: var(--font-num); font-size: 13px; overflow-wrap: anywhere; }
+ul.list .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.chip { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--idle-bg); color: var(--muted); margin-right: 6px; }
+.map { width: 100%; background: var(--bg); border-radius: 8px; display: block; }
+.legend { display: flex; gap: 14px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.bar { height: 8px; background: var(--idle-bg); border-radius: 99px; overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+.setup ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
+code { font-family: var(--font-num); font-size: 12.5px; background: var(--bg); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: no-preference) { .pill, .node { transition: background .3s, color .3s; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="top">
+    <div>
+      <h1>Car Atlas</h1>
+      <div class="sub">2024 Model Y · Starlink Mini · Orange Pi</div>
+    </div>
+    <span class="pill" id="overall">Loading</span>
+  </div>
+
+  <section class="panel hero" id="hero">
+    <div class="hero-line" id="heroLine">Checking in with the Pi…</div>
+    <div class="chain" aria-label="Connection chain">
+      <span class="node idle" id="nPi">Pi</span><span class="link" id="l1"></span>
+      <span class="node idle" id="nDish">Starlink</span><span class="link" id="l2"></span>
+      <span class="node idle" id="nNet">Internet</span><span class="link" id="l3"></span>
+      <span class="node idle" id="nDrive">Google Drive</span>
+    </div>
+    <div class="note" id="heroNote">Status comes from the Pi every minute while the car is awake.</div>
+  </section>
+
+  <section class="panel setup" id="setupPanel" hidden>
+    <h2>Finish setup</h2>
+    <ol id="setupList"></ol>
+  </section>
+
+  <section class="panel" aria-labelledby="hFoot">
+    <div class="panel-head"><h2 id="hFoot">Footage</h2><span class="pill" id="camPill">—</span></div>
+    <div class="links">
+      <a class="btn" href="https://drive.google.com/drive/folders/1MDtz0MdP8wSYrJMTbo-mmmNTcK0JkzLw" target="_blank" rel="noopener">All footage</a>
+      <a class="btn" href="https://drive.google.com/drive/folders/1B8RdEvhfc_Bk35iA9ON2iNTZHDmFbHmG" target="_blank" rel="noopener">Dashcam</a>
+      <a class="btn" href="https://drive.google.com/drive/folders/1JfANie1Q0J9mF424Ezawx67P5unRmEnX" target="_blank" rel="noopener">Sentry</a>
+    </div>
+    <div class="msg" id="camMsg">Waiting for the Pi.</div>
+    <div class="stats">
+      <div class="stat"><div class="k">Car sees the drive</div><div class="v" id="camLink">—</div></div>
+      <div class="stat"><div class="k">Waiting to upload</div><div class="v" id="camPending">—</div></div>
+      <div class="stat"><div class="k">Uploaded so far</div><div class="v" id="camTotal">—</div></div>
+      <div class="stat"><div class="k">Starlink upload today</div><div class="v" id="camToday">—</div></div>
+    </div>
+    <div>
+      <div class="row" style="justify-content:space-between"><span class="note">Dashcam drive space</span><span class="note" id="camSpace">—</span></div>
+      <div class="bar"><span id="camBar" style="width:0%"></span></div>
+    </div>
+    <div class="row">
+      <label class="note" for="recentMin">Save the last</label>
+      <select id="recentMin">
+        <option value="5">5 minutes</option>
+        <option value="10" selected>10 minutes</option>
+        <option value="20">20 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">60 minutes</option>
+      </select>
+      <button class="btn primary" id="recentBtn" type="button">Upload to Drive</button>
+    </div>
+    <div class="note" id="recentNote">For when something happened and you didn't honk or tap save. The car keeps about the last hour.</div>
+    <h2 style="font-size:16px">Latest in Drive</h2>
+    <ul class="list" id="latest"><li><span class="note">Loading…</span></li></ul>
+  </section>
+
+  <section class="panel" aria-labelledby="hDish">
+    <div class="panel-head"><h2 id="hDish">Starlink</h2><span class="pill" id="dishPill">—</span></div>
+    <div class="stats">
+      <div class="stat"><div class="k">Ping</div><div class="v" id="sPing">—</div></div>
+      <div class="stat"><div class="k">Dropped</div><div class="v" id="sDrop">—</div></div>
+      <div class="stat"><div class="k">Sky blocked</div><div class="v" id="sObs">—</div></div>
+      <div class="stat"><div class="k">In use now ↓/↑</div><div class="v" id="sThru">—</div></div>
+      <div class="stat"><div class="k">Data today ↓/↑</div><div class="v" id="sUsage">—</div></div>
+      <div class="stat"><div class="k">Power draw</div><div class="v" id="sPower">—</div></div>
+      <div class="stat"><div class="k">GPS satellites</div><div class="v" id="sGps">—</div></div>
+      <div class="stat"><div class="k">Dish on for</div><div class="v" id="sUp">—</div></div>
+    </div>
+    <div class="msg" id="dishMsg" hidden></div>
+  </section>
+
+  <section class="panel" aria-labelledby="hPi">
+    <div class="panel-head"><h2 id="hPi">Pi</h2><span class="pill" id="piPill">—</span></div>
+    <div class="stats">
+      <div class="stat"><div class="k">Temperature</div><div class="v" id="pTemp">—</div></div>
+      <div class="stat"><div class="k">WiFi</div><div class="v" id="pWifi">—</div></div>
+      <div class="stat"><div class="k">On for</div><div class="v" id="pUp">—</div></div>
+      <div class="stat"><div class="k">SD card free</div><div class="v" id="pSd">—</div></div>
+      <div class="stat"><div class="k">Tailscale</div><div class="v" id="pTs">—</div></div>
+      <div class="stat"><div class="k">Code version</div><div class="v" id="pVer">—</div></div>
+    </div>
+    <div class="note" id="pSvc"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="hMap">
+    <div class="panel-head"><h2 id="hMap">Coverage map</h2><span class="note" id="mapCount">—</span></div>
+    <svg class="map" id="map" viewBox="0 0 600 340" role="img" aria-label="Starlink signal along your drives"></svg>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--ok)"></span>Good</span>
+      <span><span class="dot" style="background:var(--warn)"></span>Weak</span>
+      <span><span class="dot" style="background:var(--bad)"></span>Dropped</span>
+    </div>
+    <div class="note" id="mapNote">Every dot is a spot you've driven, colored by how the Starlink did there. It fills in as you drive.</div>
+  </section>
+
+  <section class="panel" aria-labelledby="hAlerts">
+    <h2 id="hAlerts">Recent alerts</h2>
+    <ul class="list" id="alerts"><li><span class="note">None yet.</span></li></ul>
+  </section>
+
+  <div class="sub" id="footer">Reads your Google Drive (Tesla Footage › Pi Status). Refreshes every minute.</div>
+</main>
+
+<script>
+(() => {
+  const FOLDER_STATUS = "1GOchM5oPzy5o-gR_31qgqATBywgV4R6H";
+  const FOLDER_DASHCAM = "1B8RdEvhfc_Bk35iA9ON2iNTZHDmFbHmG";
+  const FOLDER_SENTRY = "1JfANie1Q0J9mF424Ezawx67P5unRmEnX";
+  const GD = "Google Drive";
+  const $ = (id) => document.getElementById(id);
+  const setText = (id, v) => { $(id).textContent = (v === null || v === undefined || v === "") ? "—" : String(v); };
+  const setPill = (id, cls, text) => { const el = $(id); el.className = "pill" + (cls ? " " + cls : ""); el.textContent = text; };
+  const setNode = (id, cls) => { const el = $(id); el.className = (el.classList.contains("link") ? "link" : "node") + " " + cls; };
+
+  let mcp = null;
+  let status = null;
+  let statusFileId = null, coverageFileId = null;
+  const unsubs = {};
+
+  function ago(epochS) {
+    if (!epochS) return "never";
+    const s = Math.max(0, Date.now() / 1000 - epochS);
+    if (s < 90) return Math.round(s) + "s ago";
+    if (s < 5400) return Math.round(s / 60) + " min ago";
+    if (s < 172800) return Math.round(s / 3600) + " h ago";
+    return Math.round(s / 86400) + " days ago";
+  }
+  function dur(sec) {
+    if (sec === null || sec === undefined) return null;
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    return h ? `${h}h ${m}m` : `${m}m`;
+  }
+  const fmt = (v, unit, nd = 0) => (v === null || v === undefined || isNaN(v)) ? null : Number(v).toFixed(nd) + unit;
+
+  function parsePayload(result) {
+    const p = result && result.payload;
+    if (p && typeof p === "object" && typeof p.fileContent === "string") {
+      try { return JSON.parse(p.fileContent); } catch (e) { return null; }
+    }
+    return null;
+  }
+
+  function connectorError(err, where) {
+    const code = err && err.code;
+    const name = (err && err.server) || GD;
+    if (code === "server_not_connected") return `Add ${name} in claude.ai Settings → Connectors to see live status.`;
+    if (code === "needs_reauth") return `Reconnect ${name} in claude.ai Settings → Connectors.`;
+    if (code === "not_in_manifest" || code === "approval_required" || code === "consent_required") return `This page needs your OK to read ${name}. Open it in claude.ai and allow it.`;
+    if (code === "selection_required") return `Pick which ${name} account to use when claude.ai asks.`;
+    if (code === "server_unavailable" || code === "upstream_error") return `${name} didn't answer just now (${where}). It retries every minute.`;
+    return `Couldn't read ${where} from ${name}${err && err.message ? ": " + err.message : ""}.`;
+  }
+
+  // ---------- render ----------
+  function render() {
+    const s = status;
+    const fresh = s && !s.placeholder && s.updated_epoch && (Date.now() / 1000 - s.updated_epoch) < 180;
+    const setup = [];
+
+    if (!s) { return; }
+    if (s.placeholder) {
+      setPill("overall", "", "Not installed yet");
+      $("hero").className = "panel hero";
+      $("heroLine").textContent = "The Pi hasn't checked in yet";
+      $("heroNote").textContent = "Once Car Atlas is installed on the Pi and Google Drive is connected, live status shows up here.";
+      setup.push(["Install Car Atlas on the Pi (one paste, from your Mac over Tailscale).", null]);
+      setup.push(["Connect the Pi to Google Drive:", "sudo car-atlas drive-setup"]);
+      showSetup(setup);
+      return;
+    }
+
+    const pi = s.pi || {}, d = s.starlink || {}, link = s.link || {}, cam = s.teslacam || {};
+    const camOk = cam.gadget === "attached";
+    const camUnsupported = cam.gadget === "unsupported";
+
+    // Overall
+    let level = "ok", line = "Everything's working";
+    if (!fresh) { level = "idle"; line = "Car is asleep or offline"; }
+    else if (camUnsupported || cam.gadget === "error") { level = "bad"; line = "Dashcam isn't recording to the Pi"; }
+    else if (pi.network === "starlink" && !link.pi_talking_to_dish) { level = "bad"; line = "Pi can't reach the Starlink"; }
+    else if (!pi.internet) { level = "warn"; line = "No internet right now"; }
+    else if (pi.network === "starlink" && d.quality === "weak") { level = "warn"; line = "Starlink signal is weak here"; }
+    else if (pi.network === "starlink" && d.quality === "down") { level = "warn"; line = "Starlink is searching for signal"; }
+    setPill("overall", level === "idle" ? "" : level, fresh ? (level === "ok" ? "All good" : level === "warn" ? "Heads up" : "Needs attention") : "Offline");
+    $("hero").className = "panel hero " + (level === "idle" ? "" : level);
+    $("heroLine").textContent = line;
+    $("heroNote").textContent = `Last check-in ${ago(s.updated_epoch)}` + (pi.wifi_ssid ? ` · on ${pi.wifi_ssid}` : "") + (fresh ? "" : ". The Pi turns off when the car sleeps; this is normal when parked.");
+
+    // Chain: Pi -> Starlink -> Internet -> Drive
+    setNode("nPi", fresh ? "ok" : "idle");
+    const dishOk = fresh && link.pi_talking_to_dish;
+    const onStarlink = pi.network === "starlink";
+    setNode("l1", !fresh ? "" : onStarlink ? (dishOk ? "ok" : "bad") : "");
+    setNode("nDish", !fresh ? "idle" : onStarlink ? (dishOk ? "ok" : "bad") : "idle");
+    $("nDish").textContent = onStarlink || !fresh ? "Starlink" : `WiFi: ${pi.wifi_ssid || "none"}`;
+    setNode("l2", !fresh ? "" : pi.internet ? "ok" : "bad");
+    setNode("nNet", !fresh ? "idle" : pi.internet ? "ok" : "bad");
+    setNode("l3", !fresh ? "" : s.drive_setup ? "ok" : "bad");
+    setNode("nDrive", !fresh ? "idle" : s.drive_setup ? "ok" : "bad");
+
+    // Footage
+    let camCls = camOk ? "ok" : camUnsupported || cam.gadget === "error" ? "bad" : "warn";
+    setPill("camPill", fresh ? camCls : "", camOk ? "Recording to Pi" : camUnsupported ? "Not supported" : (cam.gadget || "Unknown"));
+    let cm = "", cmCls = "";
+    if (camUnsupported) { cm = "This Pi can't act as a USB drive yet, so the car is NOT saving footage to it. Keep a USB flash drive in the glovebox port until this is fixed."; cmCls = "bad"; }
+    else if (cam.gadget === "error") { cm = "The dashcam drive hit a problem: " + (cam.detail || "unknown") + ". Keep a flash drive in the car until it's fixed."; cmCls = "bad"; }
+    else if (cam.uploading) { cm = `Uploading ${cam.uploading.kind === "sentry" ? "Sentry event" : "dashcam clip"} ${cam.uploading.folder} (${cam.uploading.mb} MB)…`; }
+    else if (cam.waiting_for) { cm = "Clips are waiting for " + cam.waiting_for + "."; cmCls = "warn"; }
+    else if (cam.last_upload) { cm = `Last upload: ${cam.last_upload.kind === "sentry" ? "Sentry" : "Dashcam"} ${cam.last_upload.folder}, ${ago(cam.last_upload.at)}.`; }
+    else { cm = camOk ? "Ready. Saved dashcam clips and Sentry events upload automatically." : "Waiting for the Pi."; }
+    if (cam.last_error && cam.last_error.at && (!cam.last_upload || cam.last_error.at > cam.last_upload.at)) { cm += " Last try failed; it retries automatically."; cmCls = cmCls || "warn"; }
+    $("camMsg").textContent = cm; $("camMsg").className = "msg " + cmCls;
+    setText("camLink", cam.usb_link === "configured" ? "Yes" : cam.usb_link ? "Not yet (" + cam.usb_link + ")" : (camOk ? "Unknown" : "No"));
+    const pend = cam.pending || {};
+    setText("camPending", cam.pending ? `${pend.dashcam || 0} dashcam · ${pend.sentry || 0} sentry` : null);
+    setText("camTotal", cam.uploaded_total ? `${cam.uploaded_total.folders} · ${cam.uploaded_total.gb} GB` : null);
+    setText("camToday", cam.starlink_uploaded_today_mb !== undefined && cam.starlink_uploaded_today_mb !== null ? cam.starlink_uploaded_today_mb + " MB" : null);
+    const img = cam.image || {};
+    setText("camSpace", img.used_pct !== undefined ? `${img.used_pct}% used · ${img.free_gb} GB free` : null);
+    $("camBar").style.width = (img.used_pct || 0) + "%";
+    $("camBar").style.background = (img.used_pct || 0) >= 85 ? "var(--bad)" : (img.used_pct || 0) >= 70 ? "var(--warn)" : "var(--accent)";
+    const rr = cam.last_recent_request;
+    if (rr && !recentPending) {
+      $("recentNote").textContent = rr.ok ? `Last request: ${rr.minutes} min uploaded to Dashcam › ${rr.folder}, ${ago(rr.at)}.` : `Last request (${ago(rr.at)}) didn't upload: ${rr.error || "unknown"}.`;
+    }
+
+    // Starlink
+    const dq = !fresh ? "" : !onStarlink ? "" : !d.reachable ? "bad" : d.quality === "good" ? "ok" : "warn";
+    setPill("dishPill", dq, !fresh ? "No recent data" : !onStarlink ? "Pi on " + (pi.wifi_ssid || "no WiFi") : !d.reachable ? "Not answering" : d.state === "CONNECTED" ? (d.quality === "good" ? "Connected" : "Connected, weak") : (d.state || "Unknown"));
+    setText("sPing", fmt(d.ping_ms, " ms"));
+    setText("sDrop", fmt(d.drop_pct, "%", 1));
+    setText("sObs", fmt(d.obstructed_pct, "%", 1));
+    setText("sThru", d.down_mbps !== undefined ? `${fmt(d.down_mbps, "", 1)} / ${fmt(d.up_mbps, "", 1)} Mbps` : null);
+    setText("sUsage", d.usage_today_mb ? `${d.usage_today_mb.down} / ${d.usage_today_mb.up} MB` : null);
+    setText("sPower", fmt(d.power_w, " W"));
+    setText("sGps", d.gps_sats);
+    setText("sUp", dur(d.uptime_s));
+    const dm = [];
+    if (d.alerts && d.alerts.length) dm.push("Dish alerts: " + d.alerts.map(a => a.replace(/_/g, " ")).join(", ") + ".");
+    if (d.location_allowed === false) dm.push("Turn on location sharing for local devices in the Starlink app (Advanced › Debug data) to build the coverage map.");
+    if (fresh && onStarlink && !d.reachable && d.error) dm.push("The Pi is on the Starlink WiFi but the dish isn't answering.");
+    $("dishMsg").hidden = dm.length === 0;
+    $("dishMsg").textContent = dm.join(" ");
+    $("dishMsg").className = "msg warn";
+
+    // Pi
+    const t = pi.cpu_temp_c;
+    setPill("piPill", !fresh ? "" : t >= 80 ? "bad" : t >= 70 ? "warn" : "ok", !fresh ? "Off / asleep" : t >= 80 ? "Hot" : t >= 70 ? "Warm" : "Running");
+    setText("pTemp", fmt(t, " °C", 1));
+    setText("pWifi", pi.wifi_ssid ? `${pi.wifi_ssid} (${pi.wifi_signal ?? "?"})` : "None");
+    setText("pUp", dur(pi.uptime_s));
+    setText("pSd", fmt(pi.sd_free_gb, " GB", 1));
+    setText("pTs", pi.tailscale_ip);
+    setText("pVer", pi.code_version);
+    const svc = pi.services || {};
+    const down = Object.entries(svc).filter(([, v]) => v !== "active").map(([k]) => k.replace("car-atlas-", ""));
+    $("pSvc").textContent = down.length ? "Not running: " + down.join(", ") : (Object.keys(svc).length ? "All Pi services running." : "");
+
+    // Alerts
+    const al = $("alerts"); al.replaceChildren();
+    (s.alerts_recent || []).forEach(a => {
+      const li = document.createElement("li");
+      const left = document.createElement("span");
+      const b = document.createElement("strong"); b.textContent = a.title;
+      left.append(b, document.createTextNode(" " + (a.message || "")));
+      const w = document.createElement("span"); w.className = "when"; w.textContent = ago(a.at);
+      li.append(left, w); al.append(li);
+    });
+    if (!al.children.length) { const li = document.createElement("li"); li.innerHTML = '<span class="note">None yet.</span>'; al.append(li); }
+
+    // Setup checklist
+    if (!s.drive_setup) setup.push(["Connect the Pi to Google Drive:", "sudo car-atlas drive-setup"]);
+    if (camUnsupported) setup.push(["Dashcam drive mode isn't supported by this Pi's kernel yet. Keep a USB flash drive in the car for now.", null]);
+    if (d.location_allowed === false) setup.push(["Allow location for local devices in the Starlink app (Advanced › Debug data).", null]);
+    showSetup(setup);
+  }
+
+  function showSetup(items) {
+    const ol = $("setupList"); ol.replaceChildren();
+    items.forEach(([text, cmd]) => {
+      const li = document.createElement("li"); li.textContent = text + " ";
+      if (cmd) { const c = document.createElement("code"); c.textContent = cmd; li.append(c); }
+      ol.append(li);
+    });
+    $("setupPanel").hidden = items.length === 0;
+  }
+
+  // ---------- coverage map ----------
+  function renderMap(cov) {
+    const svg = $("map"); svg.replaceChildren();
+    const ns = "http://www.w3.org/2000/svg";
+    const pts = (cov && cov.points) || [];
+    const W = 600, H = 340, pad = 18;
+    if (!pts.length) {
+      const t = document.createElementNS(ns, "text");
+      t.setAttribute("x", W / 2); t.setAttribute("y", H / 2); t.setAttribute("text-anchor", "middle");
+      t.setAttribute("fill", "var(--muted)"); t.setAttribute("font-size", "15");
+      t.textContent = "No drives logged yet";
+      svg.append(t); $("mapCount").textContent = "0 spots"; return;
+    }
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    pts.forEach(p => { minLat = Math.min(minLat, p[1]); maxLat = Math.max(maxLat, p[1]); minLon = Math.min(minLon, p[2]); maxLon = Math.max(maxLon, p[2]); });
+    const midLat = (minLat + maxLat) / 2, kx = Math.cos(midLat * Math.PI / 180);
+    const spanX = Math.max((maxLon - minLon) * kx, 0.002), spanY = Math.max(maxLat - minLat, 0.002);
+    const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+    const ox = (W - spanX * scale) / 2, oy = (H - spanY * scale) / 2;
+    const x = lon => ox + (lon - minLon) * kx * scale;
+    const y = lat => H - (oy + (lat - minLat) * scale);
+    const col = { g: "var(--ok)", w: "var(--warn)", d: "var(--bad)" };
+    // draw good first so problems sit on top
+    const order = { g: 0, w: 1, d: 2 };
+    [...pts].sort((a, b) => order[a[3]] - order[b[3]]).forEach(p => {
+      const c = document.createElementNS(ns, "circle");
+      c.setAttribute("cx", x(p[2]).toFixed(1)); c.setAttribute("cy", y(p[1]).toFixed(1));
+      c.setAttribute("r", p[3] === "g" ? 3 : 4.5); c.setAttribute("fill", col[p[3]] || "var(--muted)");
+      c.setAttribute("fill-opacity", p[3] === "g" ? .7 : .95);
+      svg.append(c);
+    });
+    const counts = { g: 0, w: 0, d: 0 }; pts.forEach(p => counts[p[3]] = (counts[p[3]] || 0) + 1);
+    const pct = Math.round(100 * counts.g / pts.length);
+    $("mapCount").textContent = `${pts.length} spots · ${pct}% good`;
+    $("mapNote").textContent = `North is up. Weak or dropped at ${counts.w + counts.d} spots over the last 30 days. Updated ${ago(cov.updated_epoch)}.`;
+  }
+
+  // ---------- latest clips ----------
+  let latestDash = [], latestSentry = [];
+  function renderLatest() {
+    const ul = $("latest"); ul.replaceChildren();
+    const all = [...latestDash.map(f => ["Dashcam", f]), ...latestSentry.map(f => ["Sentry", f])]
+      .sort((a, b) => (b[1].modifiedTime || "").localeCompare(a[1].modifiedTime || "")).slice(0, 6);
+    if (!all.length) { const li = document.createElement("li"); li.innerHTML = '<span class="note">Nothing uploaded yet.</span>'; ul.append(li); return; }
+    all.forEach(([kind, f]) => {
+      const li = document.createElement("li");
+      const left = document.createElement("span");
+      const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = kind;
+      const a = document.createElement("a"); a.href = f.viewUrl; a.target = "_blank"; a.rel = "noopener"; a.textContent = f.title;
+      left.append(chip, a);
+      const w = document.createElement("span"); w.className = "when"; w.textContent = f.modifiedTime ? ago(Date.parse(f.modifiedTime) / 1000) : "";
+      li.append(left, w); ul.append(li);
+    });
+  }
+
+  // ---------- data wiring ----------
+  function watchFile(key, fileId, onData, label) {
+    if (unsubs[key]) unsubs[key]();
+    unsubs[key] = mcp.watchTool(GD, "read_file_content", { fileId }, (ev) => {
+      if (ev.type === "data") { const j = parsePayload(ev.result); if (j) onData(j); }
+      else { $("footer").textContent = connectorError(ev.error, label); }
+    }, { refetchInterval: 60000 });
+  }
+
+  function start() {
+    // Find the status + coverage files in Pi Status (their ids can change if re-created)
+    mcp.watchTool(GD, "search_files", { query: `parentId = '${FOLDER_STATUS}'`, excludeContentSnippets: true }, (ev) => {
+      if (ev.type !== "data") { $("heroLine").textContent = "Can't read Google Drive"; $("heroNote").textContent = connectorError(ev.error, "the Pi's status"); return; }
+      const files = (ev.result.payload && ev.result.payload.files) || [];
+      const sf = files.find(f => f.title === "status.txt");
+      const cf = files.find(f => f.title === "coverage.txt");
+      if (sf && sf.id !== statusFileId) { statusFileId = sf.id; watchFile("status", sf.id, (j) => { status = j; render(); }, "status"); }
+      if (cf && cf.id !== coverageFileId) { coverageFileId = cf.id; watchFile("coverage", cf.id, renderMap, "coverage map"); }
+      if (!cf) renderMap(null);
+    }, { refetchInterval: 300000 });
+
+    const watchFolder = (folder, set) => mcp.watchTool(GD, "search_files",
+      { query: `parentId = '${folder}'`, orderBy: "modifiedTime desc", pageSize: 6, excludeContentSnippets: true },
+      (ev) => { if (ev.type === "data") { set((ev.result.payload && ev.result.payload.files) || []); renderLatest(); } },
+      { refetchInterval: 120000 });
+    watchFolder(FOLDER_DASHCAM, v => latestDash = v);
+    watchFolder(FOLDER_SENTRY, v => latestSentry = v);
+  }
+
+  // ---------- "upload last N minutes" ----------
+  let recentPending = false;
+  $("recentBtn").addEventListener("click", async () => {
+    if (!mcp) { $("recentNote").textContent = "Open this page in claude.ai with Google Drive connected to use this."; return; }
+    const minutes = Number($("recentMin").value) || 10;
+    $("recentBtn").disabled = true;
+    recentPending = true;
+    $("recentNote").textContent = "Sending the request…";
+    try {
+      await mcp.callTool(GD, "create_file", {
+        title: `request_recent_${Date.now()}.txt`, parentId: FOLDER_STATUS,
+        textContent: String(minutes), contentMimeType: "text/plain", disableConversionToGoogleType: true
+      });
+      $("recentNote").textContent = `Requested the last ${minutes} minutes. The Pi picks it up within a minute when the car is awake and online, then it shows up under Dashcam.`;
+    } catch (err) {
+      recentPending = false;
+      $("recentNote").textContent = (err && (err.code === "server_unavailable" || err.code === "upstream_error"))
+        ? "Not sure the request went through. Check Drive › Pi Status for a request file before trying again."
+        : connectorError(err, "the request");
+    } finally {
+      setTimeout(() => { $("recentBtn").disabled = false; recentPending = false; }, 15000);
+    }
+  });
+
+  // Tick "x ago" labels
+  setInterval(() => { if (status) render(); }, 30000);
+
+  const boot = window.claude && window.claude.use ? window.claude.use("mcp") : Promise.resolve(null);
+  boot.then((ns) => {
+    mcp = ns;
+    if (!mcp) {
+      $("heroLine").textContent = "Live status isn't available here";
+      $("heroNote").textContent = "Open this page in claude.ai with your Google Drive connector to see the car's status.";
+      setPill("overall", "", "No connection");
+      renderMap(null); renderLatest();
+      return;
+    }
+    start();
+  }).catch(() => { $("heroLine").textContent = "Live status isn't available here"; });
+})();
+</script>
+</body>
+</html>

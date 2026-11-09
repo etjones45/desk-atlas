@@ -30,3 +30,7 @@ sudo car-atlas drive-setup
 ## Settings
 Defaults: `car/config.default.env`. Local overrides: `/etc/car-atlas/config.env`.
 Google auth lives only on the Pi in `/etc/car-atlas/rclone.conf` (never in git).
+
+## Dashboard
+Published as a Claude artifact ("Car Atlas"): https://claude.ai/artifact/QE7rEDZtJvz56uPBAcDMJ6
+Source: `car/dashboard/index.html`. It reads `Pi Status/status.txt` and `coverage.txt` through the Google Drive connector.
