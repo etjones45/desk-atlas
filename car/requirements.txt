@@ -1,0 +1,3 @@
+starlink-grpc-core>=1.2.5
+grpcio
+yagrc

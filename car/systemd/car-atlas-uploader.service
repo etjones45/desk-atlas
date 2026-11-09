@@ -1,0 +1,14 @@
+[Unit]
+Description=Car Atlas - upload Dashcam and Sentry clips to Google Drive
+After=car-atlas-teslacam.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/car-atlas/venv/bin/python /opt/car-atlas/src/car/atlas/uploader.py
+Restart=always
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

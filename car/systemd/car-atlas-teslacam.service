@@ -1,0 +1,16 @@
+[Unit]
+Description=Car Atlas - show the Pi to the car as a USB drive (Dashcam/Sentry)
+DefaultDependencies=no
+After=local-fs.target sys-kernel-config.mount
+Before=network-pre.target car-atlas-uploader.service
+Wants=sys-kernel-config.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/car-atlas/src/car/scripts/teslacam-gadget.sh start
+ExecStop=/opt/car-atlas/src/car/scripts/teslacam-gadget.sh stop
+TimeoutStartSec=600
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Car Atlas - Pi + Starlink health, coverage map, dashboard status
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/car-atlas/venv/bin/python /opt/car-atlas/src/car/atlas/monitor.py
+Restart=always
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Car Atlas - pull the latest code from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/car-atlas/src/car/scripts/update.sh
+TimeoutStartSec=900

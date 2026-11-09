@@ -1,0 +1,10 @@
+[Unit]
+Description=Car Atlas - check for updates shortly after boot and every 30 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
