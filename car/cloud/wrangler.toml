@@ -1,0 +1,25 @@
+# Car Atlas web app (car.etjarvis.com). Deploy: npx wrangler deploy
+name = "car-atlas"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+account_id = "3ec3e6d976f8c378e57ff5e60d87d623"
+workers_dev = false
+routes = [{ pattern = "car.etjarvis.com", custom_domain = true }]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "car-atlas"
+database_id = "a48d526f-f543-49a9-86ab-56a0f158381e"
+
+[vars]
+VAPID_PUBLIC = "BMGbZAa7DpfyttREkTwFre4dasx4coI-D-dL4BGPhLRu678aEgfX0aZtR3MUKFhZKWPlZS1Qm1oeR6aXlPaK7YI"
+VAPID_SUBJECT = "mailto:skethanjones@gmail.com"
+
+[triggers]
+crons = ["17 */6 * * *"]

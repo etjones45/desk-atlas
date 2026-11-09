@@ -12,9 +12,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (RUN_DIR, SRC_DIR, STATE_DIR, alert, cfg_int, clock_synced, db,  # noqa: E402
-                    drive_ready, drive_remote, internet_up, load_config, log, network_kind,
-                    rclone, read_json, run, today, wifi_info, write_json)
+from common import (RUN_DIR, SRC_DIR, STATE_DIR, alert, cfg_int, clock_synced, cloud,  # noqa: E402
+                    cloud_ready, db, drive_ready, drive_remote, internet_up, load_config, log,
+                    network_kind, rclone, read_json, run, today, wifi_info, write_json)
 
 C = "monitor"
 STATUS_LOCAL = STATE_DIR / "status.json"
@@ -156,7 +156,7 @@ class Dish:
                 self.last_reboot = time.time()
                 self.bad_since = None
                 alert(cfg, "Starlink restarted", f"It was stuck ({d.get('state')}) for 15 min, so the Pi restarted it.",
-                      key="dish-reboot", cooldown_s=3600, tags="arrows_counterclockwise")
+                      key="dish-reboot", cooldown_s=3600, tags="arrows_counterclockwise", category="info")
             except Exception as e:  # noqa: BLE001
                 log(C, f"reboot failed: {e}")
 
@@ -180,6 +180,64 @@ def meters(a, b) -> float:
     lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
     x = (lon2 - lon1) * math.cos((lat1 + lat2) / 2)
     return 6371000 * math.hypot(x, lat2 - lat1)
+
+
+REQ_DIR = STATE_DIR / "requests"
+CLOUD_STATE = STATE_DIR / "cloud_state.json"
+
+
+def run_commands(cfg, dish: "Dish", net: str) -> None:
+    """Do what the app asked for (Save recent dashcam, restart Starlink, etc.)."""
+    r = cloud(cfg, "GET", "/api/pi/commands")
+    for c in (r or {}).get("commands", []):
+        cid, kind, args = c.get("id"), c.get("type"), c.get("args") or {}
+
+        def done(ok: bool, msg: str) -> None:
+            cloud(cfg, "POST", f"/api/pi/commands/{cid}", {"ok": ok, "result": msg})
+
+        log(C, f"command {cid}: {kind} {args}")
+        if kind == "upload_recent":
+            REQ_DIR.mkdir(parents=True, exist_ok=True)
+            write_json(REQ_DIR / f"recent_{cid}.json", {"id": cid, "minutes": int(args.get("minutes") or 10)})
+        elif kind == "restart_dish":
+            if net != "starlink" or not dish.ctx:
+                done(False, "The Pi isn't on the Starlink WiFi right now, so it can't reach the dish.")
+                continue
+            try:
+                starlink_grpc.reboot(context=dish.ctx)
+                dish.last_reboot = time.time()
+                done(True, "Starlink is restarting. Internet is back in about 2 minutes.")
+            except Exception as e:  # noqa: BLE001
+                done(False, f"The dish didn't take the restart: {str(e)[:120]}")
+        elif kind == "update_now":
+            run(["systemctl", "start", "--no-block", "car-atlas-update.service"], timeout=15)
+            done(True, "Checking GitHub for updates now.")
+        elif kind == "restart_services":
+            done(True, "Restarting the uploader and monitor.")
+            run(["systemctl", "restart", "car-atlas-uploader.service"], timeout=60)
+            run(["systemctl", "restart", "--no-block", "car-atlas-monitor.service"], timeout=15)
+        elif kind == "reboot_pi":
+            done(True, "The Pi is restarting. Back in about a minute.")
+            run(["systemctl", "reboot"], timeout=15)
+        elif kind == "test_alert":
+            alert(cfg, "Hello from the Pi", "If you see this, the Pi can reach your phone.",
+                  key=f"test-{cid}", cooldown_s=1, category="info")
+            done(True, "Test alert sent.")
+        else:
+            done(False, "The Pi doesn't know how to do that yet. Try 'Check for updates'.")
+
+
+def push_coverage(cfg, conn) -> None:
+    st = read_json(CLOUD_STATE, {}) or {}
+    since = st.get("coverage_ts", 0)
+    rows = conn.execute("SELECT ts, lat, lon, quality, ping_ms, drop_pct FROM coverage WHERE ts > ? ORDER BY ts LIMIT 2000",
+                        (since,)).fetchall()
+    if not rows:
+        return
+    pts = [[r[0], r[1], r[2], (r[3] or "g")[0], r[4], r[5]] for r in rows]
+    if cloud(cfg, "POST", "/api/pi/coverage", {"points": pts}, timeout=60) is not None:
+        st["coverage_ts"] = rows[-1][0]
+        write_json(CLOUD_STATE, st)
 
 
 def prefer_home_wifi(cfg, net: str, state: dict) -> None:
@@ -212,6 +270,9 @@ def main() -> None:
     last_sample_ts = 0.0
     boot_alerted = False
     home_state: dict = {}
+    last_cloud_status = 0.0
+    last_cloud_cov = 0.0
+    last_cmd_poll = 0.0
     log(C, "started")
     while True:
         loop_start = time.time()
@@ -274,6 +335,7 @@ def main() -> None:
                     "last_recent_request": up.get("last_recent_request"),
                 },
                 "drive_setup": drive_ready(),
+                "cloud": cloud_ready(cfg),
                 "alerts_recent": (read_json(STATE_DIR / "alerts_recent.json", []) or [])[:8],
             }
             write_json(STATUS_LOCAL, status)
@@ -301,7 +363,22 @@ def main() -> None:
                       key="dish-lost", cooldown_s=3600, tags="satellite")
             if d.get("location_allowed") is False:
                 alert(cfg, "Coverage map needs location", "Turn on location access for local network in the Starlink app.",
-                      key="loc-off", cooldown_s=7 * 86400, tags="world_map")
+                      key="loc-off", cooldown_s=7 * 86400, tags="world_map", category="info")
+
+            # ---- report to car.etjarvis.com and pick up commands from the app ----
+            if online and cloud_ready(cfg):
+                if time.time() - last_cloud_status >= 30:
+                    resp = cloud(cfg, "POST", "/api/pi/status", status)
+                    if resp is not None:
+                        last_cloud_status = time.time()
+                        if resp.get("commands_waiting"):
+                            last_cmd_poll = 0.0
+                if time.time() - last_cmd_poll >= 30:
+                    last_cmd_poll = time.time()
+                    run_commands(cfg, dish, net)
+                if time.time() - last_cloud_cov >= 120:
+                    last_cloud_cov = time.time()
+                    push_coverage(cfg, conn)
 
             # ---- publish to Drive ----
             if online and drive_ready() and time.time() - last_status_push >= status_s:

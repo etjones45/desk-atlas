@@ -38,6 +38,10 @@ if timeout 3 bash -c '</dev/tcp/192.168.100.1/9200' 2>/dev/null; then ok "Starli
 echo "-- Google Drive"
 if grep -q '\[gdrive\]' /etc/car-atlas/rclone.conf 2>/dev/null; then ok "Drive connected"; else bad "Drive not set up yet: run  sudo car-atlas drive-setup"; fi
 
+echo "-- Car Atlas app"
+if grep -q '^CLOUD_KEY=' /etc/car-atlas/config.env 2>/dev/null; then ok "Linked to car.etjarvis.com"
+else bad "Not linked to the app yet: make a code in the app (Settings -> Connect the Pi), then run  sudo car-atlas pair CODE"; fi
+
 echo "-- Pi"
 info "Temp: $(awk '{printf "%.1f C", $1/1000}' /sys/class/thermal/thermal_zone0/temp)   SD free: $(df -h / | awk 'NR==2{print $4}')"
 U=$(cat /run/car-atlas/uploader.json 2>/dev/null)

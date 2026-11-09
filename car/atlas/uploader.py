@@ -8,20 +8,23 @@ How it stays safe for the car's recordings:
 """
 from __future__ import annotations
 
+import base64
+import json
 import os
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (RUN_DIR, STATE_DIR, alert, cfg_int, db, drive_ready, drive_remote,  # noqa: E402
-                    internet_up, load_config, log, network_kind, rclone, read_json, run,
+from common import (RUN_DIR, STATE_DIR, alert, cfg_int, cloud, cloud_ready, db, drive_ready,  # noqa: E402
+                    drive_remote, internet_up, load_config, log, network_kind, rclone, read_json, run,
                     today, wifi_info, write_json)
 
 C = "uploader"
 MNT = RUN_DIR / "teslacam-ro"
 STATE_FILE = RUN_DIR / "uploader.json"
 SIGS_FILE = STATE_DIR / "pending_sigs.json"
+REQ_DIR = STATE_DIR / "requests"
 
 
 class ReadOnlyView:
@@ -103,8 +106,81 @@ def upload_folder(cfg, src: Path, dest_folder_id: str, name: str, bwlimit: str) 
     return code == 0, out[-400:]
 
 
-def handle_recent_request(cfg, mnt: Path, bwlimit: str, st: dict) -> None:
-    """Dashboard button: 'Upload the last N minutes of dashcam'. Request is a file in Drive/Pi Status."""
+def drive_folder_id(dest_folder_id: str, name: str) -> str | None:
+    code, out = rclone(["lsjson", "--stat", drive_remote(dest_folder_id, name)], timeout=60)
+    if code != 0:
+        return None
+    try:
+        return json.loads(out[out.index("{"):]).get("ID")
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+
+def post_clip(cfg, kind: str, src: Path | None, dest_id: str, name: str, size: int, net: str) -> None:
+    """Tell the app about an uploaded clip (with Tesla's thumbnail and event details when present)."""
+    if not cloud_ready(cfg):
+        return
+    info = {"kind": kind, "folder": name, "size_mb": round(size / 1e6, 1), "network": net,
+            "drive_id": drive_folder_id(dest_id, name)}
+    if src is not None:
+        ev = read_json(src / "event.json", {}) or {}
+        info.update({"reason": ev.get("reason"), "city": ev.get("city"), "event_ts": ev.get("timestamp")})
+        for k_src, k_dst in (("est_lat", "lat"), ("est_lon", "lon")):
+            try:
+                info[k_dst] = float(ev.get(k_src)) if ev.get(k_src) not in (None, "") else None
+            except (TypeError, ValueError):
+                info[k_dst] = None
+        thumb = src / "thumb.png"
+        try:
+            if thumb.is_file() and thumb.stat().st_size < 500_000:
+                info["thumb_b64"] = base64.b64encode(thumb.read_bytes()).decode()
+                info["thumb_type"] = "image/png"
+        except OSError:
+            pass
+    cloud(cfg, "POST", "/api/pi/clip", info, timeout=60)
+
+
+def upload_recent(cfg, mnt: Path, minutes: int, bwlimit: str, net: str) -> dict:
+    """Upload the last N minutes of RecentClips into Dashcam/Recent_<time>."""
+    recent = mnt / "TeslaCam" / "RecentClips"
+    files = list(recent.rglob("*.mp4")) if recent.is_dir() else []
+    # Tesla names files like 2026-11-09_08-15-30-front.mp4 (one per camera per minute)
+    stamps = sorted({f.name[:19] for f in files if len(f.name) > 19}, reverse=True)[:minutes]
+    chosen = [f for f in files if f.name[:19] in stamps]
+    result = {"at": time.time(), "minutes": minutes, "files": len(chosen)}
+    if not chosen:
+        result.update({"ok": False, "error": "no recent clips on the drive yet"})
+        return result
+    list_path = RUN_DIR / "recent_list.txt"
+    list_path.write_text("\n".join(str(f.relative_to(recent)) for f in chosen))
+    dest = f"Recent_{stamps[0]}"
+    size = sum(f.stat().st_size for f in chosen)
+    code, out = rclone(["copy", str(recent), drive_remote(cfg["DRIVE_DASHCAM_ID"], dest),
+                        "--files-from", str(list_path), "--transfers", "2"],
+                       timeout=4 * 3600, bwlimit=bwlimit)
+    result.update({"ok": code == 0, "folder": dest, "mb": round(size / 1e6), "error": None if code == 0 else out[-300:]})
+    if code == 0:
+        post_clip(cfg, "requested", None, cfg["DRIVE_DASHCAM_ID"], dest, size, net)
+        alert(cfg, "Dashcam uploaded", f"Last {minutes} min of dashcam is in Google Drive ({dest}).",
+              key=f"recent-{dest}", cooldown_s=60, tags="movie_camera", category="clip", to_cloud=False,
+              click=f"https://drive.google.com/drive/folders/{cfg['DRIVE_DASHCAM_ID']}")
+    return result
+
+
+def handle_recent_requests(cfg, mnt: Path, bwlimit: str, net: str, st: dict) -> None:
+    """Requests come from the app (via the Pi's command queue) or from a request file in Drive/Pi Status."""
+    REQ_DIR.mkdir(parents=True, exist_ok=True)
+    for req in sorted(REQ_DIR.glob("recent_*.json")):
+        r = read_json(req, {}) or {}
+        minutes = max(1, min(60, int(r.get("minutes") or 10)))
+        res = upload_recent(cfg, mnt, minutes, bwlimit, net)
+        st["last_recent_request"] = res
+        if r.get("id"):
+            msg = (f"{res.get('mb', 0)} MB uploaded to Dashcam/{res['folder']}" if res.get("ok")
+                   else f"Didn't upload: {res.get('error')}")
+            cloud(cfg, "POST", f"/api/pi/commands/{r['id']}", {"ok": bool(res.get("ok")), "result": msg})
+        req.unlink(missing_ok=True)
+
     status_id = cfg["DRIVE_STATUS_ID"]
     code, out = rclone(["lsf", drive_remote(status_id), "--include", "request_recent*.txt"], timeout=60)
     if code != 0 or not out.strip():
@@ -116,27 +192,7 @@ def handle_recent_request(cfg, mnt: Path, bwlimit: str, st: dict) -> None:
         if tok.isdigit():
             minutes = max(1, min(60, int(tok)))
             break
-    recent = mnt / "TeslaCam" / "RecentClips"
-    files = [f for f in recent.rglob("*.mp4")] if recent.is_dir() else []
-    # Tesla names files like 2026-11-09_08-15-30-front.mp4 (one per camera per minute)
-    stamps = sorted({f.name[:19] for f in files if len(f.name) > 19}, reverse=True)[:minutes]
-    chosen = [f for f in files if f.name[:19] in stamps]
-    result = {"at": time.time(), "minutes": minutes, "files": len(chosen)}
-    if chosen:
-        list_path = RUN_DIR / "recent_list.txt"
-        list_path.write_text("\n".join(str(f.relative_to(recent)) for f in chosen))
-        dest = f"Recent_{stamps[0]}"
-        code, out = rclone(["copy", str(recent), drive_remote(cfg["DRIVE_DASHCAM_ID"], dest),
-                            "--files-from", str(list_path), "--transfers", "2"],
-                           timeout=4 * 3600, bwlimit=bwlimit)
-        result.update({"ok": code == 0, "folder": dest, "error": None if code == 0 else out[-300:]})
-        if code == 0:
-            alert(cfg, "Dashcam uploaded", f"Last {minutes} min of dashcam is in Google Drive ({dest}).",
-                  key=f"recent-{dest}", cooldown_s=60, tags="movie_camera",
-                  click=f"https://drive.google.com/drive/folders/{cfg['DRIVE_DASHCAM_ID']}")
-    else:
-        result.update({"ok": False, "error": "no recent clips on the drive yet"})
-    st["last_recent_request"] = result
+    st["last_recent_request"] = upload_recent(cfg, mnt, minutes, bwlimit, net)
     rclone(["deletefile", drive_remote(status_id, req_name)], timeout=60)
 
 
@@ -248,12 +304,19 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
 
         if not online or not drive_ready():
             st["waiting_for"] = "internet" if not online else "google drive setup"
+            if online and not drive_ready():
+                for req in REQ_DIR.glob("recent_*.json"):
+                    r = read_json(req, {}) or {}
+                    if r.get("id"):
+                        cloud(cfg, "POST", f"/api/pi/commands/{r['id']}",
+                              {"ok": False, "result": "Google Drive isn't connected on the Pi yet (run: sudo car-atlas drive-setup)"})
+                    req.unlink(missing_ok=True)
             return
         st["waiting_for"] = None
         bwlimit = cfg.get("UPLOAD_LIMIT_STARLINK", "375k") if net == "starlink" else cfg.get("UPLOAD_LIMIT_OTHER", "0")
 
         try:
-            handle_recent_request(cfg, mnt, bwlimit, st)
+            handle_recent_requests(cfg, mnt, bwlimit, net, st)
         except Exception as e:  # noqa: BLE001
             log(C, f"recent request failed: {e}")
 
@@ -265,7 +328,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     st["waiting_for"] = "home wifi (today's Starlink upload cap reached)"
                     alert(cfg, "Upload cap reached",
                           "Today's Starlink upload limit is used up. The rest uploads on home WiFi.",
-                          key="cap-" + today(), cooldown_s=86400, tags="warning")
+                          key="cap-" + today(), cooldown_s=86400, tags="warning", category="info")
                     continue
             log(C, f"uploading {kind} {folder.name} ({size/1e6:.0f} MB) over {net}")
             st["uploading"] = {"kind": kind, "folder": folder.name, "mb": round(size / 1e6), "since": time.time()}
@@ -280,9 +343,11 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     add_budget(conn, size)
                 st["last_upload"] = {"kind": kind, "folder": folder.name, "mb": round(size / 1e6), "at": time.time()}
                 st["last_error"] = None
+                post_clip(cfg, kind, folder, dest_id, folder.name, size, net)
                 label = "Dashcam clip" if kind == "dashcam" else "Sentry event"
                 alert(cfg, f"{label} saved to Drive", f"{folder.name} ({size/1e6:.0f} MB) uploaded.",
                       key=f"up-{kind}-{folder.name}", cooldown_s=10, tags="white_check_mark",
+                      category="clip", to_cloud=False,
                       click=f"https://drive.google.com/drive/folders/{dest_id}")
             else:
                 st["last_error"] = {"at": time.time(), "folder": folder.name, "detail": detail}

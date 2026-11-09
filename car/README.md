@@ -34,3 +34,11 @@ Google auth lives only on the Pi in `/etc/car-atlas/rclone.conf` (never in git).
 ## Dashboard
 Published as a Claude artifact ("Car Atlas"): https://claude.ai/artifact/QE7rEDZtJvz56uPBAcDMJ6
 Source: `car/dashboard/index.html`. It reads `Pi Status/status.txt` and `coverage.txt` through the Google Drive connector.
+
+## Phone app: https://car.etjarvis.com
+Cloudflare Worker + D1 in `car/cloud/` (deploy with `npx wrangler deploy`). Household password login,
+web push notifications (add to Home Screen on iPhone first), Pi pairing from Settings.
+The Pi reports every 30 s (`/api/pi/status`), pushes coverage points and uploaded clips (with Tesla's
+thumbnail), and polls `/api/pi/commands` for app actions: save recent dashcam, restart Starlink,
+check for updates, restart services, restart the Pi, test alert.
+Secrets (push signing key, password hash, device key) live only in Cloudflare, never in git.

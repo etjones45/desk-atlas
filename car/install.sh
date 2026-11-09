@@ -1,8 +1,10 @@
 #!/bin/bash
 # Car Atlas installer. On the Pi:
-#   curl -fsSL https://raw.githubusercontent.com/etjones45/desk-atlas/car/car/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/etjones45/desk-atlas/car/car/install.sh | sudo bash -s -- PAIR-CODE
+# PAIR-CODE comes from the app (car.etjarvis.com -> Settings -> Connect the Pi) and is optional.
 # Safe to run again; it just updates.
 set -eu
+PAIR_CODE="${1:-}"
 REPO_URL=https://github.com/etjones45/desk-atlas
 BRANCH=car
 SRC=/opt/car-atlas/src
@@ -12,7 +14,7 @@ echo "=== Installing Car Atlas ==="
 
 echo "-> Installing system packages (a minute or two)"
 apt-get update -qq || echo "   (apt update had trouble; continuing)"
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git rclone dosfstools fdisk python3-venv util-linux >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git rclone dosfstools fdisk python3-venv util-linux curl >/dev/null
 
 echo "-> Getting the code"
 mkdir -p /opt/car-atlas /etc/car-atlas /var/lib/car-atlas
@@ -30,6 +32,7 @@ if [ ! -f /etc/car-atlas/config.env ]; then
 NTFY_TOPIC=$TOPIC
 EOF
 fi
+chmod 600 /etc/car-atlas/config.env
 
 cat > /usr/local/bin/car-atlas <<'EOF'
 #!/bin/bash
@@ -37,10 +40,11 @@ S=/opt/car-atlas/src/car/scripts
 case "${1:-}" in
   doctor) exec "$S/doctor.sh" ;;
   drive-setup) exec "$S/drive-setup.sh" ;;
+  pair) shift; exec "$S/pair.sh" "$@" ;;
   update) exec "$S/update.sh" ;;
   logs) exec journalctl -u car-atlas-teslacam -u car-atlas-uploader -u car-atlas-monitor -u car-atlas-update -n 80 --no-pager ;;
   status) cat /var/lib/car-atlas/status.json ;;
-  *) echo "car-atlas doctor | drive-setup | update | logs | status" ;;
+  *) echo "car-atlas doctor | drive-setup | pair CODE | update | logs | status" ;;
 esac
 EOF
 chmod +x /usr/local/bin/car-atlas
@@ -55,16 +59,19 @@ echo "-> Starting the dashcam drive (first time creates a 16 GB drive on the SD 
 systemctl start car-atlas-teslacam.service || true
 sleep 3
 
+if [ -n "$PAIR_CODE" ]; then
+  echo "-> Linking to the Car Atlas app"
+  "$SRC/car/scripts/pair.sh" "$PAIR_CODE" || echo "   (linking didn't work; make a new code in the app and run: sudo car-atlas pair NEW-CODE)"
+fi
+
 echo
 "$SRC/car/scripts/doctor.sh" || true
 
-. /etc/car-atlas/config.env
-cat <<EOF
+cat <<'EOF'
 
 === Installed ===
 Next:
  1) Connect Google Drive (one time):   sudo car-atlas drive-setup
- 2) Phone alerts: install the free "ntfy" app, tap +, and subscribe to:
-        $NTFY_TOPIC
+ 2) Open the app:                      https://car.etjarvis.com
  3) Check anytime:                     sudo car-atlas doctor
 EOF

@@ -192,14 +192,48 @@ def record_alert_locally(title: str, message: str) -> None:
     write_json(STATE_DIR / "alerts_recent.json", recent[:20])
 
 
+def cloud_ready(cfg: dict) -> bool:
+    return bool((cfg.get("CLOUD_URL") or "").strip() and (cfg.get("CLOUD_KEY") or "").strip())
+
+
+def cloud(cfg: dict, method: str, path: str, data=None, timeout: int = 20):
+    """Talk to car.etjarvis.com. Returns parsed JSON, or None if it didn't work."""
+    if not cloud_ready(cfg):
+        return None
+    url = cfg["CLOUD_URL"].rstrip("/") + path
+    body = json.dumps(data, default=str).encode() if data is not None else None
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Authorization", "Bearer " + cfg["CLOUD_KEY"].strip())
+    req.add_header("User-Agent", "car-atlas-pi")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else {}
+    except Exception as e:  # noqa: BLE001 - cloud is best-effort
+        log("cloud", f"{method} {path} failed: {e}")
+        return None
+
+
 def alert(cfg: dict, title: str, message: str, key: str, cooldown_s: int = 3600,
-          tags: str = "", click: str = "") -> None:
-    if not notify(cfg, title, message, key=key, cooldown_s=cooldown_s, tags=tags, click=click):
-        sent = read_json(STATE_DIR / "alerts_sent.json", {}) or {}
-        if time.time() - sent.get(key, 0) >= cooldown_s:
-            record_alert_locally(title, message)
-            sent[key] = time.time()
-            write_json(STATE_DIR / "alerts_sent.json", sent)
+          tags: str = "", click: str = "", category: str = "problem", to_cloud: bool = True) -> None:
+    """Raise an alert once per cooldown: to the app (push notification), ntfy if set, and the local log."""
+    sent_path = STATE_DIR / "alerts_sent.json"
+    sent = read_json(sent_path, {}) or {}
+    now = time.time()
+    if key and now - sent.get(key, 0) < cooldown_s:
+        return
+    if key:
+        sent[key] = now
+        write_json(sent_path, sent)
+    if to_cloud and cloud_ready(cfg):
+        cloud(cfg, "POST", "/api/pi/alert", {"title": title, "message": message, "category": category,
+                                              "link": "/#footage" if category == "clip" else "/#home"})
+    if (cfg.get("NTFY_TOPIC") or "").strip():
+        notify(cfg, title, message, key=None, tags=tags, click=click)
+    else:
+        record_alert_locally(title, message)
 
 
 def today() -> str:
