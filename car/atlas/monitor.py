@@ -1,5 +1,6 @@
-"""Watches the Pi and the Starlink, logs coverage, and publishes status to Google Drive
-(Tesla Footage/Pi Status/status.txt), which the dashboard reads.
+"""Watches the Pi, the dashcam USB link, the Starlink and (optional) USB GPS.
+Logs coverage, reports to car.etjarvis.com, runs commands from the app, and publishes a
+status file to Google Drive (Tesla Footage/Pi Status/status.txt) as a backup.
 """
 from __future__ import annotations
 
@@ -13,11 +14,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (RUN_DIR, SRC_DIR, STATE_DIR, alert, cfg_int, clock_synced, cloud,  # noqa: E402
-                    cloud_ready, db, drive_ready, drive_remote, internet_up, load_config, log,
-                    network_kind, rclone, read_json, run, today, wifi_info, write_json)
+                    cloud_ready, db, drive_ready, drive_remote, git_sha, internet_up, load_config, log,
+                    network_kind, rclone, read_json, read_text, run, today, usb_info, version,
+                    wifi_info, write_json)
+from gps import GPSReader  # noqa: E402
 
 C = "monitor"
 STATUS_LOCAL = STATE_DIR / "status.json"
+REQ_DIR = STATE_DIR / "requests"
+CLOUD_STATE = STATE_DIR / "cloud_state.json"
+MON_STATE = STATE_DIR / "monitor_state.json"
+GADGET_SH = str(SRC_DIR / "scripts" / "teslacam-gadget.sh")
+USB_FIX_SH = str(SRC_DIR / "scripts" / "usb-fix.sh")
 
 try:
     import starlink_grpc  # type: ignore
@@ -25,40 +33,58 @@ except Exception:  # noqa: BLE001
     starlink_grpc = None
 
 
-def pi_health() -> dict:
-    out: dict = {"hostname": os.uname().nodename}
-    try:
-        out["cpu_temp_c"] = round(int(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000, 1)
-    except (OSError, ValueError):
-        out["cpu_temp_c"] = None
-    try:
-        out["uptime_s"] = int(float(Path("/proc/uptime").read_text().split()[0]))
-    except (OSError, ValueError):
-        out["uptime_s"] = None
-    out["load1"] = round(os.getloadavg()[0], 2)
-    try:
-        mem = {}
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            k, v = line.split(":", 1)
-            mem[k] = int(v.split()[0])
-        out["mem_used_pct"] = round(100 * (1 - mem["MemAvailable"] / mem["MemTotal"]), 1)
-    except (OSError, KeyError, ValueError):
-        out["mem_used_pct"] = None
-    du = shutil.disk_usage("/")
-    out["sd_free_gb"] = round(du.free / 1e9, 1)
-    code, ts = run(["tailscale", "ip", "-4"], timeout=5)
-    out["tailscale_ip"] = ts.strip().splitlines()[0] if code == 0 and ts.strip() else None
-    code, sha = run(["git", "-C", str(SRC_DIR.parent), "rev-parse", "--short", "HEAD"], timeout=5)
-    out["code_version"] = sha.strip() if code == 0 else None
-    svc = {}
-    for name in ("car-atlas-teslacam", "car-atlas-uploader", "car-atlas-monitor", "tailscaled"):
-        _, s = run(["systemctl", "is-active", name], timeout=5)
-        svc[name] = s.strip() or "unknown"
-    out["services"] = svc
-    out["clock_synced"] = clock_synced()
-    return out
+# ---------------------------------------------------------------- Pi health
+class PiHealth:
+    """Fast numbers every loop; slower checks (services, Tailscale, git) once a minute."""
+
+    def __init__(self):
+        self.slow: dict = {}
+        self.slow_at = 0.0
+
+    def get(self) -> dict:
+        out: dict = {"hostname": os.uname().nodename}
+        try:
+            out["cpu_temp_c"] = round(int(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000, 1)
+        except (OSError, ValueError):
+            out["cpu_temp_c"] = None
+        try:
+            out["uptime_s"] = int(float(Path("/proc/uptime").read_text().split()[0]))
+        except (OSError, ValueError):
+            out["uptime_s"] = None
+        out["load1"] = round(os.getloadavg()[0], 2)
+        try:
+            mem = {}
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                k, v = line.split(":", 1)
+                mem[k] = int(v.split()[0])
+            out["mem_used_pct"] = round(100 * (1 - mem["MemAvailable"] / mem["MemTotal"]), 1)
+        except (OSError, KeyError, ValueError):
+            out["mem_used_pct"] = None
+        out["sd_free_gb"] = round(shutil.disk_usage("/").free / 1e9, 1)
+        freq = read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+        out["cpu_mhz"] = int(freq) // 1000 if freq and freq.isdigit() else None
+        out["cpu_governor"] = read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+        if time.time() - self.slow_at > 60:
+            self.slow_at = time.time()
+            code, ts = run(["tailscale", "ip", "-4"], timeout=5)
+            svc = {}
+            for name in ("car-atlas-teslacam", "car-atlas-uploader", "car-atlas-monitor", "tailscaled"):
+                _, s = run(["systemctl", "is-active", name], timeout=5)
+                svc[name] = s.strip() or "unknown"
+            self.slow = {
+                "tailscale_ip": ts.strip().splitlines()[0] if code == 0 and ts.strip() else None,
+                "code_version": git_sha(),
+                "services": svc,
+                "clock_synced": clock_synced(),
+                "timezone": read_text("/etc/timezone"),
+            }
+        out.update(self.slow)
+        out["version"] = version()
+        out["update"] = read_json(STATE_DIR / "update.json", {}) or {}
+        return out
 
 
+# ---------------------------------------------------------------- Starlink
 class Dish:
     def __init__(self):
         self.ctx = starlink_grpc.ChannelContext() if starlink_grpc else None
@@ -69,6 +95,7 @@ class Dish:
         self.power_w = None
         self.bad_since = None
         self.last_reboot = 0.0
+        self.location_supported = True
 
     def poll(self) -> dict:
         if not self.ctx:
@@ -96,24 +123,24 @@ class Dish:
             "hardware": status.get("hardware_version"),
             "gps_sats": status.get("gps_sats"),
             "alerts": sorted(k.replace("alert_", "") for k, v in (alerts or {}).items() if v),
+            "location": None,
         }
-        try:
-            loc = starlink_grpc.location_data(context=self.ctx)
-            if loc.get("latitude") is None:
-                d["location_allowed"] = False
-                d["location"] = None
-            else:
-                d["location_allowed"] = True
-                d["location"] = {"lat": round(loc["latitude"], 5), "lon": round(loc["longitude"], 5)}
-        except Exception:  # noqa: BLE001
-            d["location_allowed"] = None
-            d["location"] = None
-        self.poll_usage(d)
+        # Starlink removed dish location from the local API in May 2026. Try (cheaply) in case it returns.
+        if self.location_supported:
+            try:
+                loc = starlink_grpc.location_data(context=self.ctx)
+                if loc.get("latitude") is not None:
+                    d["location"] = {"lat": round(loc["latitude"], 5), "lon": round(loc["longitude"], 5)}
+                else:
+                    self.location_supported = False
+            except Exception:  # noqa: BLE001
+                self.location_supported = False
+        self.poll_usage()
         d["power_w"] = self.power_w
         self.last = d
         return d
 
-    def poll_usage(self, d: dict) -> None:
+    def poll_usage(self) -> None:
         if time.time() - self.last_usage_poll < 300:
             return
         self.last_usage_poll = time.time()
@@ -182,18 +209,74 @@ def meters(a, b) -> float:
     return 6371000 * math.hypot(x, lat2 - lat1)
 
 
-REQ_DIR = STATE_DIR / "requests"
-CLOUD_STATE = STATE_DIR / "cloud_state.json"
+# ---------------------------------------------------------------- dashcam USB link
+class UsbWatch:
+    """Watches whether the car is connected to the Pi's dashcam drive, retries once, and alerts."""
+
+    def __init__(self):
+        self.not_attached_since = None
+        self.rebound = False
+        st = read_json(MON_STATE, {}) or {}
+        self.ever_connected = bool(st.get("car_ever_connected"))
+        self.connected_this_boot = False
+
+    def check(self, cfg, usb: dict, uptime: int) -> dict:
+        info = dict(usb)
+        connected = usb.get("car_connected")
+        if connected:
+            self.not_attached_since = None
+            if not self.connected_this_boot:
+                self.connected_this_boot = True
+                st = read_json(MON_STATE, {}) or {}
+                st["car_last_connected"] = time.time()
+                if not self.ever_connected:
+                    self.ever_connected = True
+                    st["car_ever_connected"] = True
+                    alert(cfg, "Dashcam is recording to the Pi",
+                          "The car connected to the Pi's dashcam drive. You can leave the flash drive out now.",
+                          key="car-first-connect", cooldown_s=10 * 365 * 86400, category="info")
+                write_json(MON_STATE, st)
+        elif usb.get("bound"):
+            self.not_attached_since = self.not_attached_since or time.time()
+            waited = time.time() - self.not_attached_since
+            # The car usually connects within seconds. If not, re-offer the drive once.
+            if waited > 60 and not self.rebound and uptime > 90:
+                self.rebound = True
+                log(C, "car hasn't connected to the dashcam drive; re-offering it")
+                run([GADGET_SH, "rebind"], timeout=30)
+            if waited > 180 and uptime > 240 and self.ever_connected and not self.connected_this_boot:
+                alert(cfg, "Car isn't seeing the dashcam drive",
+                      "The Pi is on but the car hasn't connected to it. Check the cable is in the Pi's USB0 port.",
+                      key="car-not-connected", cooldown_s=6 * 3600, tags="rotating_light")
+        info["hint"] = usb_hint(usb, uptime)
+        info["ever_connected"] = self.ever_connected
+        info["connected_this_boot"] = self.connected_this_boot
+        info["rebind_tried"] = self.rebound
+        return info
 
 
-def run_commands(cfg, dish: "Dish", net: str) -> None:
+def usb_hint(usb: dict, uptime: int) -> str | None:
+    if usb.get("gadget") == "unsupported" or not usb.get("udcs"):
+        return "This Pi isn't offering USB drive mode. Run 'sudo car-atlas doctor' for details."
+    if usb.get("usb0_host_overlay"):
+        return "USB0 is set to host mode in orangepi-config. Turn off the usb0-host overlay so the car can see the drive."
+    if usb.get("car_connected"):
+        return None
+    if usb.get("state") in ("not attached", None):
+        return ("The car isn't connected to the Pi's USB0 port. The cable from the glovebox must go into USB0: "
+                "the USB-C port at the end of the board, next to the antenna, farthest from the mini-HDMI.")
+    return f"USB link is '{usb.get('state')}'. The car is talking to the Pi but hasn't finished connecting."
+
+
+# ---------------------------------------------------------------- app commands
+def run_commands(cfg, dish: Dish, net: str) -> None:
     """Do what the app asked for (Save recent dashcam, restart Starlink, etc.)."""
-    r = cloud(cfg, "GET", "/api/pi/commands")
+    r = cloud(cfg, "GET", "/api/pi/commands", timeout=10)
     for c in (r or {}).get("commands", []):
         cid, kind, args = c.get("id"), c.get("type"), c.get("args") or {}
 
         def done(ok: bool, msg: str) -> None:
-            cloud(cfg, "POST", f"/api/pi/commands/{cid}", {"ok": ok, "result": msg})
+            cloud(cfg, "POST", f"/api/pi/commands/{cid}", {"ok": ok, "result": msg}, timeout=10)
 
         log(C, f"command {cid}: {kind} {args}")
         if kind == "upload_recent":
@@ -211,7 +294,7 @@ def run_commands(cfg, dish: "Dish", net: str) -> None:
                 done(False, f"The dish didn't take the restart: {str(e)[:120]}")
         elif kind == "update_now":
             run(["systemctl", "start", "--no-block", "car-atlas-update.service"], timeout=15)
-            done(True, "Checking GitHub for updates now.")
+            done(True, f"Checking GitHub for updates now (currently on v{version()}).")
         elif kind == "restart_services":
             done(True, "Restarting the uploader and monitor.")
             run(["systemctl", "restart", "car-atlas-uploader.service"], timeout=60)
@@ -223,6 +306,14 @@ def run_commands(cfg, dish: "Dish", net: str) -> None:
             alert(cfg, "Hello from the Pi", "If you see this, the Pi can reach your phone.",
                   key=f"test-{cid}", cooldown_s=1, category="info")
             done(True, "Test alert sent.")
+        elif kind == "usb_rebind":
+            code, out = run([GADGET_SH, "rebind"], timeout=30)
+            time.sleep(3)
+            state = usb_info().get("state")
+            done(code == 0, f"Re-offered the dashcam drive. USB link is now: {state}.")
+        elif kind in ("usb_fix", "usb_fix_undo"):
+            done(True, "Applying the USB setting change and restarting the Pi (back in about 2 minutes).")
+            run(["systemd-run", "--on-active=3", USB_FIX_SH] + (["undo"] if kind == "usb_fix_undo" else []), timeout=15)
         else:
             done(False, "The Pi doesn't know how to do that yet. Try 'Check for updates'.")
 
@@ -235,7 +326,7 @@ def push_coverage(cfg, conn) -> None:
     if not rows:
         return
     pts = [[r[0], r[1], r[2], (r[3] or "g")[0], r[4], r[5]] for r in rows]
-    if cloud(cfg, "POST", "/api/pi/coverage", {"points": pts}, timeout=60) is not None:
+    if cloud(cfg, "POST", "/api/pi/coverage", {"points": pts}, timeout=30) is not None:
         st["coverage_ts"] = rows[-1][0]
         write_json(CLOUD_STATE, st)
 
@@ -258,22 +349,48 @@ def prefer_home_wifi(cfg, net: str, state: dict) -> None:
             return
 
 
+def note_version_change(cfg) -> None:
+    st = read_json(MON_STATE, {}) or {}
+    v = version()
+    prev = st.get("version")
+    if not prev:
+        # First run of a versioned build. If the Pi already had Car Atlas before, that was v1.0.
+        try:
+            conn = db()
+            row = conn.execute("SELECT MIN(ts) FROM samples").fetchone()
+            conn.close()
+            if row and row[0] and time.time() - row[0] > 3600:
+                prev = "1.0"
+        except Exception:  # noqa: BLE001
+            pass
+    if prev and prev != v:
+        st["updated_from"] = prev
+        st["updated_at"] = time.time()
+        alert(cfg, f"Pi updated to v{v}", f"The Pi is now running Car Atlas v{v} (was v{prev}).",
+              key=f"version-{v}", cooldown_s=365 * 86400, category="info")
+    st["version"] = v
+    write_json(MON_STATE, st)
+
+
+# ---------------------------------------------------------------- main loop
 def main() -> None:
     cfg = load_config()
     dish = Dish()
+    health = PiHealth()
+    usbw = UsbWatch()
+    gps = GPSReader(cfg.get("GPS_DEVICE", "auto"))
+    gps.start()
     poll_s = cfg_int(cfg, "DISH_POLL_INTERVAL", 15)
     status_s = cfg_int(cfg, "STATUS_INTERVAL", 60)
-    last_status_push = 0.0
-    last_coverage_push = 0.0
+    last_status_push = last_coverage_push = 0.0
     last_point = None
-    last_point_ts = 0.0
-    last_sample_ts = 0.0
-    boot_alerted = False
+    last_point_ts = last_sample_ts = 0.0
     home_state: dict = {}
-    last_cloud_status = 0.0
-    last_cloud_cov = 0.0
-    last_cmd_poll = 0.0
-    log(C, "started")
+    last_cloud_status = last_cloud_cov = last_cmd_poll = 0.0
+    last_location = (read_json(MON_STATE, {}) or {}).get("last_location")
+    version_noted = False
+    synced, synced_at = False, 0.0
+    log(C, f"started v{version()}")
     while True:
         loop_start = time.time()
         try:
@@ -283,17 +400,34 @@ def main() -> None:
             prefer_home_wifi(cfg, net, home_state)
             d = dish.poll() if net == "starlink" else dict(dish.last, reachable=False, error="Pi is not on the Starlink WiFi")
             q = quality(d)
-            synced = clock_synced()
+            if time.time() - synced_at > 60 or not synced:
+                synced, synced_at = clock_synced(), time.time()
+            pi = health.get()
+            g = gps.snapshot()
+
+            # Where is the car? USB GPS first, then the dish (if Starlink ever brings it back).
+            loc = None
+            if g.get("fresh"):
+                loc = {"lat": g["lat"], "lon": g["lon"], "source": "gps", "at": g["at"],
+                       "speed_mph": g.get("speed_mph"), "sats": g.get("sats")}
+            elif d.get("location") and d.get("reachable"):
+                loc = dict(d["location"], source="starlink", at=time.time(), speed_mph=None)
+            if loc:
+                if not last_location or meters((last_location["lat"], last_location["lon"]), (loc["lat"], loc["lon"])) > 30 \
+                        or time.time() - last_location.get("at", 0) > 600:
+                    st = read_json(MON_STATE, {}) or {}
+                    st["last_location"] = loc
+                    write_json(MON_STATE, st)
+                last_location = loc
+
             conn = db()
             if synced and time.time() - last_sample_ts >= 60:
-                loc = d.get("location") or {}
                 conn.execute("INSERT INTO samples VALUES(?,?,?,?,?,?,?,?,?)",
-                             (time.time(), loc.get("lat"), loc.get("lon"), d.get("state"), d.get("ping_ms"),
+                             (time.time(), (loc or {}).get("lat"), (loc or {}).get("lon"), d.get("state"), d.get("ping_ms"),
                               d.get("drop_pct"), int(bool(d.get("currently_obstructed"))),
                               d.get("down_mbps"), d.get("up_mbps")))
                 last_sample_ts = time.time()
-            loc = d.get("location")
-            if synced and loc and d.get("reachable"):
+            if synced and loc and net == "starlink":
                 p = (loc["lat"], loc["lon"])
                 moved = last_point is None or meters(last_point, p) > 75
                 if moved or (q != "good" and time.time() - last_point_ts > 60):
@@ -302,30 +436,38 @@ def main() -> None:
                     last_point, last_point_ts = p, time.time()
             conn.commit()
 
-            pi = pi_health()
             dish.maybe_reboot(cfg, d, net == "starlink")
+            usb = usbw.check(cfg, usb_info(), pi.get("uptime_s") or 0)
             up = read_json(RUN_DIR / "uploader.json", {}) or {}
-            gadget = read_json(RUN_DIR / "gadget.json", {}) or {}
             u = conn.execute("SELECT down_bytes, up_bytes FROM usage WHERE day=?", (today(),)).fetchone()
             online = internet_up()
+            pend = up.get("pending") or {}
+            speed = (loc or {}).get("speed_mph")
 
             status = {
-                "version": 1,
+                "version": 2,
                 "updated_epoch": time.time(),
                 "updated": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "pi": dict(pi, wifi_ssid=wifi["ssid"], wifi_signal=wifi["signal"], network=net, internet=online),
                 "starlink": dict(d, quality=q, last_contact_epoch=dish.last_ok or None,
+                                 location_supported=dish.location_supported,
                                  usage_today_mb={"down": round((u[0] if u else 0) / 1e6),
                                                  "up": round((u[1] if u else 0) / 1e6)}),
                 "link": {"pi_on_starlink_wifi": net == "starlink",
                          "pi_talking_to_dish": bool(d.get("reachable")),
                          "last_contact_epoch": dish.last_ok or None},
+                "location": loc or (dict(last_location, stale=True) if last_location else None),
+                "gps": {"device": g.get("device"), "fix": bool(g.get("fresh")), "sats": g.get("sats"),
+                        "error": g.get("error") if not g.get("device") else None},
+                "motion": {"driving": bool(speed and speed >= 3), "speed_mph": speed} if loc else None,
                 "teslacam": {
-                    "gadget": gadget.get("gadget", "unknown"),
-                    "detail": gadget.get("detail"),
-                    "usb_link": up.get("usb_link"),
+                    "gadget": usb.get("gadget"),
+                    "detail": usb.get("detail"),
+                    "usb_link": usb.get("state"),
+                    "usb": usb,
                     "image": up.get("image"),
-                    "pending": up.get("pending"),
+                    "pending": {"dashcam": (pend.get("dashcam") or 0) + (pend.get("encrypted") or 0),
+                                "sentry": pend.get("sentry") or 0} if up.get("pending") else None,
                     "uploading": up.get("uploading"),
                     "last_upload": up.get("last_upload"),
                     "last_error": up.get("last_error"),
@@ -333,6 +475,7 @@ def main() -> None:
                     "uploaded_total": up.get("uploaded_total"),
                     "starlink_uploaded_today_mb": up.get("starlink_uploaded_today_mb"),
                     "last_recent_request": up.get("last_recent_request"),
+                    "last_cleanup": up.get("last_cleanup"),
                 },
                 "drive_setup": drive_ready(),
                 "cloud": cloud_ready(cfg),
@@ -341,34 +484,32 @@ def main() -> None:
             write_json(STATUS_LOCAL, status)
 
             # ---- alerts ----
-            if not boot_alerted and pi.get("uptime_s", 0) > 90:
-                boot_alerted = True
-                g = gadget.get("gadget") or "not running"
-                if g == "unsupported":
-                    alert(cfg, "Dashcam NOT recording to the Pi",
-                          "This Pi can't act as a USB drive yet. Keep a flash drive in the car.",
-                          key="gadget-unsupported", cooldown_s=12 * 3600, tags="rotating_light")
-                elif g not in ("attached",):
-                    alert(cfg, "Dashcam drive problem", f"USB drive mode is '{g}'. Check the dashboard.",
-                          key="gadget-bad", cooldown_s=6 * 3600, tags="rotating_light")
+            if not version_noted and online:
+                version_noted = True
+                note_version_change(cfg)
+            if usb.get("gadget") == "unsupported" and (pi.get("uptime_s") or 0) > 90:
+                alert(cfg, "Dashcam NOT recording to the Pi",
+                      "This Pi isn't offering USB drive mode. Keep a flash drive in the car and check the app.",
+                      key="gadget-unsupported", cooldown_s=12 * 3600, tags="rotating_light")
+            if usb.get("gadget") == "error" and (pi.get("uptime_s") or 0) > 90:
+                alert(cfg, "Dashcam drive problem", f"The Pi couldn't set up the dashcam drive: {usb.get('detail')}. "
+                      "Keep a flash drive in the car and run 'sudo car-atlas doctor'.",
+                      key="gadget-error", cooldown_s=12 * 3600, tags="rotating_light")
             if (pi.get("cpu_temp_c") or 0) >= cfg_int(cfg, "PI_TEMP_ALERT_C", 80):
                 alert(cfg, "Pi running hot", f"{pi['cpu_temp_c']} C in the glovebox.", key="hot",
                       cooldown_s=2 * 3600, tags="fire")
             img = (up.get("image") or {})
             if (img.get("used_pct") or 0) >= 85:
-                alert(cfg, "Dashcam drive almost full", f"{img.get('used_pct')}% used. Clear old clips from the car's Viewer.",
-                      key="img-full", cooldown_s=24 * 3600, tags="warning")
+                alert(cfg, "Dashcam drive almost full", f"{img.get('used_pct')}% used. Old clips already in Drive get "
+                      "cleared automatically at home.", key="img-full", cooldown_s=24 * 3600, tags="warning")
             if net == "starlink" and dish.last_ok and time.time() - dish.last_ok > 300:
                 alert(cfg, "Pi lost contact with Starlink", "On the Starlink WiFi but the dish isn't answering.",
                       key="dish-lost", cooldown_s=3600, tags="satellite")
-            if d.get("location_allowed") is False:
-                alert(cfg, "Coverage map needs location", "Turn on location access for local network in the Starlink app.",
-                      key="loc-off", cooldown_s=7 * 86400, tags="world_map", category="info")
 
             # ---- report to car.etjarvis.com and pick up commands from the app ----
             if online and cloud_ready(cfg):
                 if time.time() - last_cloud_status >= 30:
-                    resp = cloud(cfg, "POST", "/api/pi/status", status)
+                    resp = cloud(cfg, "POST", "/api/pi/status", status, timeout=10)
                     if resp is not None:
                         last_cloud_status = time.time()
                         if resp.get("commands_waiting"):
@@ -380,8 +521,8 @@ def main() -> None:
                     last_cloud_cov = time.time()
                     push_coverage(cfg, conn)
 
-            # ---- publish to Drive ----
-            if online and drive_ready() and time.time() - last_status_push >= status_s:
+            # ---- backup status file in Google Drive ----
+            if online and drive_ready() and time.time() - last_status_push >= max(status_s, 120):
                 tmp = RUN_DIR / "status.txt"
                 tmp.write_text(json.dumps(status, default=str))
                 code, out = rclone(["copyto", str(tmp), drive_remote(cfg["DRIVE_STATUS_ID"], "status.txt")], timeout=90)
@@ -389,7 +530,7 @@ def main() -> None:
                     last_status_push = time.time()
                 else:
                     log(C, f"status push failed: {out[-200:]}")
-            if online and drive_ready() and time.time() - last_coverage_push >= 600:
+            if online and drive_ready() and time.time() - last_coverage_push >= 1800:
                 cutoff = time.time() - 30 * 86400
                 rows = conn.execute("SELECT ts, lat, lon, quality, ping_ms, drop_pct FROM coverage WHERE ts>? "
                                     "ORDER BY ts", (cutoff,)).fetchall()
@@ -400,7 +541,6 @@ def main() -> None:
                 code, _ = rclone(["copyto", str(tmp), drive_remote(cfg["DRIVE_STATUS_ID"], "coverage.txt")], timeout=120)
                 if code == 0:
                     last_coverage_push = time.time()
-            # keep the database small
             conn.execute("DELETE FROM samples WHERE ts < ?", (time.time() - 60 * 86400,))
             conn.commit()
             conn.close()

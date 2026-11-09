@@ -13,7 +13,9 @@ set +a
 cat <<'EOF'
 
 === Connect the Pi to Google Drive ===
-On your MAC (a new Terminal window, not the Pi), run these two lines:
+Do the next step on your MAC, not the Pi. Open a NEW Terminal window on the Mac.
+The line you type on should start with your Mac name (like ejones45@...), NOT orangepi@.
+Then run these two lines there:
 
   curl -fsSL https://rclone.org/install.sh | sudo bash
   rclone authorize "drive"

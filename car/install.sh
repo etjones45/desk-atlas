@@ -14,7 +14,7 @@ echo "=== Installing Car Atlas ==="
 
 echo "-> Installing system packages (a minute or two)"
 apt-get update -qq || echo "   (apt update had trouble; continuing)"
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git rclone dosfstools fdisk python3-venv util-linux curl >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git rclone dosfstools exfatprogs mtools fdisk python3-venv util-linux curl device-tree-compiler >/dev/null
 
 echo "-> Getting the code"
 mkdir -p /opt/car-atlas /etc/car-atlas /var/lib/car-atlas
@@ -34,20 +34,7 @@ EOF
 fi
 chmod 600 /etc/car-atlas/config.env
 
-cat > /usr/local/bin/car-atlas <<'EOF'
-#!/bin/bash
-S=/opt/car-atlas/src/car/scripts
-case "${1:-}" in
-  doctor) exec "$S/doctor.sh" ;;
-  drive-setup) exec "$S/drive-setup.sh" ;;
-  pair) shift; exec "$S/pair.sh" "$@" ;;
-  update) exec "$S/update.sh" ;;
-  logs) exec journalctl -u car-atlas-teslacam -u car-atlas-uploader -u car-atlas-monitor -u car-atlas-update -n 80 --no-pager ;;
-  status) cat /var/lib/car-atlas/status.json ;;
-  *) echo "car-atlas doctor | drive-setup | pair CODE | update | logs | status" ;;
-esac
-EOF
-chmod +x /usr/local/bin/car-atlas
+# (the car-atlas command is written by post-update.sh)
 
 echo "-> Turning off the Desk Atlas face + listening (they heat up the Pi; voice can't work in a closed glovebox)"
 systemctl disable --now desk-atlas.service desk-atlas-ears.service >/dev/null 2>&1 || true
@@ -55,7 +42,7 @@ systemctl disable --now desk-atlas.service desk-atlas-ears.service >/dev/null 2>
 echo "-> Setting up services"
 "$SRC/car/scripts/post-update.sh" install
 
-echo "-> Starting the dashcam drive (first time creates a 16 GB drive on the SD card)"
+echo "-> Starting the dashcam drive (first time creates it using the SD card's free space)"
 systemctl start car-atlas-teslacam.service || true
 sleep 3
 

@@ -17,8 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (RUN_DIR, STATE_DIR, alert, cfg_int, cloud, cloud_ready, db, drive_ready,  # noqa: E402
-                    drive_remote, internet_up, load_config, log, network_kind, rclone, read_json, run,
-                    today, wifi_info, write_json)
+                    attach_image, detach_loops, drive_remote, fs_type, internet_up, load_config, log, network_kind,
+                    rclone, read_json, run, today, usb_info, wifi_info, write_json)
 
 C = "uploader"
 MNT = RUN_DIR / "teslacam-ro"
@@ -32,34 +32,31 @@ class ReadOnlyView:
 
     def __init__(self, image: str):
         self.image = image
-        self.loop = None
+        self.loops: list[str] = []
 
     def __enter__(self):
         if not os.path.isfile(self.image):
             return None
-        code, out = run(["losetup", "-r", "-P", "-f", "--show", self.image])
-        if code != 0:
-            log(C, f"losetup failed: {out.strip()}")
+        part, self.loops = attach_image(self.image, read_only=True)
+        if not part:
             return None
-        self.loop = out.strip().splitlines()[-1]
-        part = self.loop + "p1"
-        for _ in range(10):
-            if os.path.exists(part):
-                break
-            time.sleep(0.3)
         MNT.mkdir(parents=True, exist_ok=True)
-        code, out = run(["mount", "-t", "vfat", "-o", "ro,noatime,utf8", part, str(MNT)])
+        fst = fs_type(part) or "vfat"
+        opts = "ro,noatime,utf8" if fst == "vfat" else "ro,noatime"
+        code, out = run(["mount", "-t", fst, "-o", opts, part, str(MNT)])
+        if code != 0:  # let the kernel guess
+            code, out = run(["mount", "-o", "ro,noatime", part, str(MNT)])
         if code != 0:
             log(C, f"mount failed: {out.strip()}")
-            run(["losetup", "-d", self.loop])
-            self.loop = None
+            detach_loops(self.loops)
+            self.loops = []
             return None
         return MNT
 
     def __exit__(self, *exc):
         run(["umount", str(MNT)])
-        if self.loop:
-            run(["losetup", "-d", self.loop])
+        detach_loops(self.loops)
+        self.loops = []
 
 
 def folder_sig(path: Path) -> tuple[str, int]:
@@ -215,23 +212,21 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
     gadget_sh = str(Path(__file__).resolve().parent.parent / "scripts" / "teslacam-gadget.sh")
     log(C, f"drive {used}% full; cleaning up {len(rows)} uploaded folders")
     run([gadget_sh, "stop"], timeout=30)
-    removed, loop = 0, None
+    removed, loops = 0, []
     try:
-        code, out = run(["losetup", "-P", "-f", "--show", cfg["TESLACAM_IMAGE"]])
-        if code != 0:
-            raise RuntimeError(out)
-        loop = out.strip().splitlines()[-1]
-        part = loop + "p1"
-        time.sleep(1)
-        run(["fsck.vfat", "-a", part], timeout=300)
+        part, loops = attach_image(cfg["TESLACAM_IMAGE"], read_only=False)
+        if not part:
+            raise RuntimeError("could not attach the drive image")
+        fst = fs_type(part) or "vfat"
+        run(["fsck.exfat" if fst == "exfat" else "fsck.vfat", "-y" if fst == "exfat" else "-a", part], timeout=300)
         rw = RUN_DIR / "teslacam-rw"
         rw.mkdir(parents=True, exist_ok=True)
-        code, out = run(["mount", "-t", "vfat", "-o", "rw,noatime", part, str(rw)])
+        code, out = run(["mount", "-t", fst, "-o", "rw,noatime", part, str(rw)])
         if code != 0:
             raise RuntimeError(out)
         try:
             for kind, folder in rows:
-                sub = "SavedClips" if kind == "dashcam" else "SentryClips"
+                sub = {"dashcam": "SavedClips", "sentry": "SentryClips", "encrypted": "EncryptedClips"}.get(kind, "SavedClips")
                 target = rw / "TeslaCam" / sub / folder
                 if target.is_dir() and target.parent.name == sub:
                     run(["rm", "-rf", "--one-file-system", str(target)], timeout=120)
@@ -242,23 +237,17 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
     except Exception as e:  # noqa: BLE001
         log(C, f"cleanup error: {e}")
     finally:
-        if loop:
-            run(["losetup", "-d", loop])
+        detach_loops(loops)
         run([gadget_sh, "start"], timeout=120)
     st["last_cleanup"] = {"at": time.time(), "removed": removed, "was_used_pct": used}
     log(C, f"cleanup removed {removed} folders; drive re-attached")
 
 
 def cycle(cfg, conn, st: dict, pending: dict) -> None:
-    gadget = read_json(RUN_DIR / "gadget.json", {}) or {}
-    st["gadget"] = gadget.get("gadget", "unknown")
-    st["gadget_detail"] = gadget.get("detail")
-    udc = gadget.get("udc")
-    if udc:
-        try:
-            st["usb_link"] = Path(f"/sys/class/udc/{udc}/state").read_text().strip()
-        except OSError:
-            st["usb_link"] = None
+    usb = usb_info()
+    st["gadget"] = usb.get("gadget")
+    st["gadget_detail"] = usb.get("detail")
+    st["usb_link"] = usb.get("state")
 
     wifi = wifi_info()
     net = network_kind(cfg, wifi["ssid"])
@@ -274,10 +263,11 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         st["image"] = image_usage(mnt)
         cam = mnt / "TeslaCam"
         kinds = [("SavedClips", cfg["DRIVE_DASHCAM_ID"], "dashcam"),
+                 ("EncryptedClips", cfg["DRIVE_DASHCAM_ID"], "encrypted"),
                  ("SentryClips", cfg["DRIVE_SENTRY_ID"], "sentry")]
         queue = []
         seen = set()
-        counts = {"dashcam": 0, "sentry": 0}
+        counts = {"dashcam": 0, "sentry": 0, "encrypted": 0}
         for sub, dest_id, kind in kinds:
             base = cam / sub
             if not base.is_dir():
@@ -343,8 +333,8 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     add_budget(conn, size)
                 st["last_upload"] = {"kind": kind, "folder": folder.name, "mb": round(size / 1e6), "at": time.time()}
                 st["last_error"] = None
-                post_clip(cfg, kind, folder, dest_id, folder.name, size, net)
-                label = "Dashcam clip" if kind == "dashcam" else "Sentry event"
+                post_clip(cfg, "sentry" if kind == "sentry" else "dashcam", folder, dest_id, folder.name, size, net)
+                label = "Sentry event" if kind == "sentry" else "Dashcam clip"
                 alert(cfg, f"{label} saved to Drive", f"{folder.name} ({size/1e6:.0f} MB) uploaded.",
                       key=f"up-{kind}-{folder.name}", cooldown_s=10, tags="white_check_mark",
                       category="clip", to_cloud=False,

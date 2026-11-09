@@ -22,6 +22,119 @@ def log(component: str, msg: str) -> None:
     print(f"[{component}] {msg}", flush=True)
 
 
+def read_text(path, default=None):
+    try:
+        return Path(path).read_text().replace("\x00", "").strip()
+    except (OSError, UnicodeDecodeError):
+        return default
+
+
+def version() -> str:
+    return read_text(SRC_DIR / "VERSION", "unknown") or "unknown"
+
+
+def git_sha() -> str | None:
+    code, out = run(["git", "-C", str(SRC_DIR.parent), "rev-parse", "--short", "HEAD"], timeout=5)
+    return out.strip() if code == 0 else None
+
+
+USB0_DR_MODE = "/sys/firmware/devicetree/base/soc/usb@5100000/dr_mode"
+ORANGEPI_ENV = Path("/boot/orangepiEnv.txt")
+
+
+def usb_info() -> dict:
+    """What the dashcam USB connection looks like right now (cheap: only reads small files)."""
+    gadget = read_json(RUN_DIR / "gadget.json", {}) or {}
+    udcs = sorted(p.name for p in Path("/sys/class/udc").glob("*")) if Path("/sys/class/udc").exists() else []
+    udc = gadget.get("udc") or (udcs[0] if udcs else None)
+    state = read_text(f"/sys/class/udc/{udc}/state") if udc else None
+    speed = read_text(f"/sys/class/udc/{udc}/current_speed") if udc else None
+    env = {}
+    for line in (read_text(ORANGEPI_ENV, "") or "").splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+    overlays = (env.get("overlays", "") + " " + env.get("user_overlays", "")).split()
+    otg_role = None
+    for p in Path("/sys/devices/platform").glob("soc*/*usbc0*/otg_role"):
+        otg_role = read_text(p)
+        break
+    bound = read_text("/sys/kernel/config/usb_gadget/teslacam/UDC")
+    img = load_config().get("TESLACAM_IMAGE", "/var/lib/car-atlas/teslacam.img")
+    return {
+        "gadget": gadget.get("gadget", "unknown"),
+        "detail": gadget.get("detail"),
+        "udc": udc,
+        "udcs": udcs,
+        "bound": bool(bound),
+        "state": state,
+        "speed": speed,
+        "car_connected": state == "configured",
+        "dr_mode": read_text(USB0_DR_MODE),
+        "otg_role": otg_role,
+        "usb0_host_overlay": any("usb0-host" in o for o in overlays),
+        "otg_fix_installed": any("car-atlas-usb0-otg" in o for o in overlays),
+        "image_gb": round(os.path.getsize(img) / 1e9, 1) if os.path.exists(img) else None,
+    }
+
+
+def loop_partition(loop: str) -> str:
+    """The car's filesystem: partition 1 if the image has a partition table, else the whole image."""
+    for _ in range(10):
+        if os.path.exists(loop + "p1"):
+            return loop + "p1"
+        time.sleep(0.3)
+    return loop
+
+
+def _first_partition(image: str) -> tuple[int, int] | None:
+    """(start_bytes, size_bytes) of partition 1 from the image's partition table, if it has one."""
+    code, out = run(["sfdisk", "-J", image], timeout=15)
+    if code != 0:
+        return None
+    try:
+        t = json.loads(out)["partitiontable"]
+        p = t["partitions"][0]
+        sector = int(t.get("sectorsize", 512))
+        return int(p["start"]) * sector, int(p["size"]) * sector
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def attach_image(image: str, read_only: bool = True) -> tuple[str | None, list[str]]:
+    """Attach the dashcam image as a block device. Returns (filesystem_device, loops_to_detach).
+
+    Uses the kernel's partition node (loopNp1) when it shows up, and falls back to mapping
+    partition 1 by its byte offset, so it works even if partition scanning isn't available.
+    """
+    ro = ["-r"] if read_only else []
+    code, out = run(["losetup", *ro, "-P", "-f", "--show", image])
+    if code != 0:
+        log("common", f"losetup failed: {out.strip()}")
+        return None, []
+    loop = out.strip().splitlines()[-1]
+    part = loop_partition(loop)
+    if part != loop:
+        return part, [loop]
+    span = _first_partition(image)
+    if span:
+        code, out = run(["losetup", *ro, "-f", "--show", "-o", str(span[0]), "--sizelimit", str(span[1]), image])
+        if code == 0:
+            p = out.strip().splitlines()[-1]
+            return p, [p, loop]
+    return loop, [loop]
+
+
+def detach_loops(loops: list[str]) -> None:
+    for lp in loops:
+        run(["losetup", "-d", lp])
+
+
+def fs_type(device: str) -> str | None:
+    code, out = run(["blkid", "-o", "value", "-s", "TYPE", device], timeout=10)
+    return out.strip() or None if code == 0 else None
+
+
 def _read_env(path: Path) -> dict:
     out = {}
     try:

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Applies an update: refresh Python packages and service files, restart the background services.
+# Applies an update: refresh Python packages, service files, the car-atlas command and Pi settings,
+# then restart the background services.
 # The dashcam drive (car-atlas-teslacam) is NOT restarted here, so recording is never interrupted;
 # changes to it take effect on the next boot.
 set -u
@@ -24,9 +25,29 @@ for unit in "$CAR"/systemd/*; do
 done
 [ "$changed" = 1 ] && systemctl daemon-reload
 
-systemctl enable car-atlas-teslacam.service car-atlas-uploader.service car-atlas-monitor.service car-atlas-update.timer >/dev/null 2>&1
+# The car-atlas command (kept in sync with the code)
+cat > /usr/local/bin/car-atlas <<'EOF'
+#!/bin/bash
+S=/opt/car-atlas/src/car/scripts
+case "${1:-}" in
+  doctor) exec "$S/doctor.sh" ;;
+  drive-setup) exec "$S/drive-setup.sh" ;;
+  pair) shift; exec "$S/pair.sh" "$@" ;;
+  update) exec "$S/update.sh" ;;
+  usb-fix) shift; exec "$S/usb-fix.sh" "$@" ;;
+  usb-rebind) exec "$S/teslacam-gadget.sh" rebind ;;
+  version) echo "Car Atlas v$(cat /opt/car-atlas/src/car/VERSION) ($(git -C /opt/car-atlas/src rev-parse --short HEAD))" ;;
+  logs) exec journalctl -u car-atlas-teslacam -u car-atlas-uploader -u car-atlas-monitor -u car-atlas-update -u car-atlas-tune -n 100 --no-pager ;;
+  status) cat /var/lib/car-atlas/status.json ;;
+  *) echo "car-atlas doctor | version | drive-setup | pair CODE | update | usb-rebind | usb-fix [undo] | logs | status" ;;
+esac
+EOF
+chmod +x /usr/local/bin/car-atlas
+
+systemctl enable car-atlas-teslacam.service car-atlas-uploader.service car-atlas-monitor.service \
+  car-atlas-tune.service car-atlas-update.timer >/dev/null 2>&1
+systemctl start car-atlas-tune.service || true
 systemctl restart car-atlas-monitor.service car-atlas-uploader.service
 systemctl start car-atlas-update.timer
 
-# One-off migrations can go here, keyed on the previous version ($1).
-echo "[post-update] done"
+echo "[post-update] done (v$(cat "$CAR/VERSION"))"

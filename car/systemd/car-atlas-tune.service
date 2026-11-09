@@ -1,0 +1,11 @@
+[Unit]
+Description=Car Atlas - keep Pi settings tuned (time zone, CPU, WiFi retries, logs)
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/car-atlas/src/car/scripts/tune.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
