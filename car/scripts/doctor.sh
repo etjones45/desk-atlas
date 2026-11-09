@@ -24,6 +24,7 @@ if [ "$S" = "configured" ]; then
   ok "Car is connected to the drive (USB state: configured)"
 else
   bad "Car is NOT connected (USB state: ${S:-unknown})"
+  echo "         -> For a deeper look:  sudo car-atlas usb-debug"
   echo "         -> The cable from the glovebox must be in the Pi's USB0 port: the USB-C port at the END of"
   echo "            the board, next to the little antenna connector, farthest from the mini-HDMI."
   echo "            (USB1, the middle port, is host-only, so the car can't see a drive through it.)"
@@ -60,6 +61,6 @@ if grep -q '^CLOUD_KEY=' /etc/car-atlas/config.env 2>/dev/null; then ok "Linked 
 else bad "Not linked to the app yet: make a code in the app (Settings -> Connect the Pi), then run  sudo car-atlas pair CODE"; fi
 
 echo "-- Pi"
-info "Temp: $(awk '{printf "%.1f C", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null)   CPU: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)   SD free: $(df -h / | awk 'NR==2{print $4}')   Time zone: $(cat /etc/timezone 2>/dev/null)"
+info "Temp: $(awk '{printf "%.1f C", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null)   CPU: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)   SD free: $(df -h / | awk 'NR==2{print $4}')   Time zone: $(readlink -f /etc/localtime | sed 's|.*/zoneinfo/||')"
 UP=$(cat /run/car-atlas/uploader.json 2>/dev/null)
 [ -n "$UP" ] && info "Uploader: $(echo "$UP" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("pending",d.get("pending"),"| waiting for",d.get("waiting_for"),"| last upload",(d.get("last_upload") or {}).get("folder"))' 2>/dev/null)"

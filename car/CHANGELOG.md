@@ -1,5 +1,10 @@
 # Car Atlas versions
 
+## 1.1.1 (2026-11-09)
+- Dashcam USB troubleshooting: `car-atlas usb-debug` shows what the Pi's USB chip sees (power from the car,
+  session, kernel messages). The same readings go to the app so Atlas can check them remotely.
+- Time zone shows correctly (the Pi was already on Denver time; the check was reading an old file).
+
 ## 1.1 (2026-11-09)
 - Versions: the Pi reports which version it's running; the app compares it with the latest.
 - Dashcam drive: live USB diagnostics (which port, whether the car connected), automatic retry if the

@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (RUN_DIR, SRC_DIR, STATE_DIR, alert, cfg_int, clock_synced, cloud,  # noqa: E402
                     cloud_ready, db, drive_ready, drive_remote, git_sha, internet_up, load_config, log,
-                    network_kind, rclone, read_json, read_text, run, today, usb_info, version,
+                    network_kind, rclone, read_json, read_text, run, today, usb_info, usb_kernel_log, usb_lowlevel, version,
                     wifi_info, write_json)
 from gps import GPSReader  # noqa: E402
 
@@ -76,7 +76,7 @@ class PiHealth:
                 "code_version": git_sha(),
                 "services": svc,
                 "clock_synced": clock_synced(),
-                "timezone": read_text("/etc/timezone"),
+                "timezone": os.path.realpath("/etc/localtime").split("zoneinfo/")[-1],
             }
         out.update(self.slow)
         out["version"] = version()
@@ -219,6 +219,8 @@ class UsbWatch:
         st = read_json(MON_STATE, {}) or {}
         self.ever_connected = bool(st.get("car_ever_connected"))
         self.connected_this_boot = False
+        self.klog_at = 0.0
+        self.klog: list[str] = []
 
     def check(self, cfg, usb: dict, uptime: int) -> dict:
         info = dict(usb)
@@ -253,6 +255,11 @@ class UsbWatch:
                       "The Pi is on and offering the drive, but the car isn't connected. The glovebox cable must go "
                       "into the Pi's USB0 port (end of the board, next to the antenna). Keep the flash drive in until then.",
                       key="car-never-connected", cooldown_s=12 * 3600, tags="rotating_light")
+        info["low"] = usb_lowlevel(usb.get("udc"))
+        if not connected and time.time() - self.klog_at > 60:
+            self.klog_at = time.time()
+            self.klog = usb_kernel_log()
+        info["klog"] = self.klog if not connected else None
         info["hint"] = usb_hint(usb, uptime)
         info["ever_connected"] = self.ever_connected
         info["connected_this_boot"] = self.connected_this_boot

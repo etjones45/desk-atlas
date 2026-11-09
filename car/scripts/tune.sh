@@ -12,8 +12,10 @@ log() { echo "[tune] $*"; }
 
 # Local time zone (daily upload limits and timestamps follow Denver time)
 TZ_WANT="${TIMEZONE:-America/Denver}"
-if [ "$(cat /etc/timezone 2>/dev/null)" != "$TZ_WANT" ] && [ -e "/usr/share/zoneinfo/$TZ_WANT" ]; then
-  timedatectl set-timezone "$TZ_WANT" 2>/dev/null || { ln -sf "/usr/share/zoneinfo/$TZ_WANT" /etc/localtime; echo "$TZ_WANT" > /etc/timezone; }
+TZ_NOW=$(readlink -f /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+if { [ "$TZ_NOW" != "$TZ_WANT" ] || [ "$(cat /etc/timezone 2>/dev/null)" != "$TZ_WANT" ]; } && [ -e "/usr/share/zoneinfo/$TZ_WANT" ]; then
+  timedatectl set-timezone "$TZ_WANT" 2>/dev/null || ln -sf "/usr/share/zoneinfo/$TZ_WANT" /etc/localtime
+  echo "$TZ_WANT" > /etc/timezone
   log "time zone set to $TZ_WANT"
 fi
 

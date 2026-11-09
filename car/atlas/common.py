@@ -78,6 +78,57 @@ def usb_info() -> dict:
     }
 
 
+def usb_lowlevel(udc: str | None) -> dict:
+    """What the USB chip itself reports (root only; cheap). Helps tell a bad cable from a Pi-side problem."""
+    out: dict = {}
+    if not udc:
+        return out
+    dev = os.path.realpath(f"/sys/class/udc/{udc}/device")
+    out["otg_state"] = read_text(f"{dev}/mode")
+    out["vbus"] = read_text(f"{dev}/vbus")
+    for d in (f"/sys/kernel/debug/usb/{udc}", f"/sys/kernel/debug/{udc}"):
+        txt = read_text(f"{d}/regdump")
+        if not txt:
+            continue
+        for line in txt.splitlines():
+            k, _, v = line.partition(":")
+            k, v = k.strip(), v.strip()
+            if k in ("DevCtl", "Power", "FAddr"):
+                out[k.lower()] = v
+        dc = out.get("devctl")
+        try:
+            n = int(dc, 16)
+            out["session"] = n & 1
+            out["vbus_level"] = (n >> 3) & 3
+            out["b_device"] = (n >> 7) & 1
+        except (TypeError, ValueError):
+            pass
+        break
+    try:
+        for line in Path("/proc/interrupts").read_text().splitlines():
+            if "musb" in line.lower():
+                parts = line.split()
+                out["irq_count"] = sum(int(x) for x in parts[1:] if x.isdigit())
+                break
+    except OSError:
+        pass
+    ext = {}
+    for e in Path("/sys/class/extcon").glob("*") if Path("/sys/class/extcon").exists() else []:
+        ext[read_text(e / "name") or e.name] = (read_text(e / "state") or "").replace("\n", " ")
+    if ext:
+        out["extcon"] = ext
+    return out
+
+
+def usb_kernel_log(lines: int = 12) -> list[str]:
+    code, out = run(["dmesg"], timeout=5)
+    if code != 0:
+        return []
+    keep = [ln for ln in out.splitlines()
+            if any(k in ln.lower() for k in ("musb", "sun4i-usb", "udc", "gadget", "mass_storage", "vbus", "extcon", "5100000.usb"))]
+    return [ln[:180] for ln in keep[-lines:]]
+
+
 def loop_partition(loop: str) -> str:
     """The car's filesystem: partition 1 if the image has a partition table, else the whole image."""
     for _ in range(10):
