@@ -8,7 +8,7 @@
     sentry: "https://drive.google.com/drive/folders/1JfANie1Q0J9mF424Ezawx67P5unRmEnX",
   };
   const INSTALL_URL = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car/install.sh";
-  const APP_VERSION = "1.1"; // this app build; the server reports its own (they match after a deploy)
+  const APP_VERSION = "1.2"; // this app build; the server reports its own (they match after a deploy)
 
   // ---------- icons ----------
   const P = {
@@ -43,6 +43,17 @@
     usb: '<path d="M12 21V5"/><path d="M9 6l3-3 3 3"/><path d="M12 15l-4-3V9"/><path d="M12 13l4-3V8"/><circle cx="8" cy="8" r="1.4"/><rect x="14.6" y="6" width="2.8" height="2.6"/><circle cx="12" cy="20" r="1.6"/>',
     tag: '<path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.5"/>',
     star: '<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/>',
+    gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4.5-5.5"/><circle cx="12" cy="17" r="1.2"/>',
+    qr: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 14h2M14 18h2v2M18 18h2v2"/>',
+    wheel: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.2"/><path d="M12 14.2V21M9.9 11.3L3.6 9.2M14.1 11.3l6.3-2.1"/>',
+    pulse: '<path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>',
+    pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+    play: '<path d="M7 5l12 7-12 7z"/>',
+    list: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
+    moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+    mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17.5" cy="9" r="2.4"/><path d="M16 14.2a5 5 0 0 1 5 5"/>',
     gps: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
     speed: '<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/>',
     ext: '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
@@ -68,6 +79,37 @@
     const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
     return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
   }
+  function durShort(sec) {
+    sec = Math.max(0, Math.round(sec || 0));
+    const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+    return h ? `${h}h ${m}m` : m ? `${m} min` : `${sec} s`;
+  }
+  const BATTERY_KWH = 75; // rough Model Y pack size, for "about X% of the battery"
+  const gbText = (mb) => (mb >= 1000 ? (mb / 1000).toFixed(1) + " GB" : Math.round(mb || 0) + " MB");
+  // Settings the Pi follows (uploads, speed tests, ...). Saved in the app; the Pi picks them up at its next check-in.
+  const S = () => (state.ov && state.ov.settings) || {};
+  async function saveSetting(patch, msg) {
+    try {
+      const r = await api("/api/settings/pi", { method: "POST", body: patch });
+      if (state.ov) { state.ov.settings = r.settings; state.ov.plan = r.plan; state.ov.settings_applied = false; }
+      const awake = derive().fresh;
+      toast(msg || (awake ? "Saved. The Pi picks it up within a minute." : "Saved. The Pi picks it up next time the car is awake."));
+      render();
+    } catch (e) { if (e.message !== "auth") toast(e.message); }
+  }
+  const toggleRow = (key, title, desc, on) => `<label class="toggle"><span><div style="font-weight:600">${title}</div><div class="muted small">${desc}</div></span>
+    <span class="switch"><input type="checkbox" data-set="${key}" ${on ? "checked" : ""}><span></span></span></label>`;
+  function bindSettings(root) {
+    root.querySelectorAll("input[data-set]").forEach((i) => i.onchange = () => saveSetting({ [i.dataset.set]: i.dataset.invert ? !i.checked : i.checked }));
+    root.querySelectorAll("button[data-setk]").forEach((b) => b.onclick = () => {
+      const v = isNaN(Number(b.dataset.setv)) ? b.dataset.setv : Number(b.dataset.setv);
+      if (b.dataset.confirm && !b.classList.contains("on")) {
+        confirmSheet({ title: b.dataset.ctitle || "Change this?", body: esc(b.dataset.confirm), yes: "Yes, change it", danger: true }).then((y) => y && saveSetting({ [b.dataset.setk]: v }));
+      } else saveSetting({ [b.dataset.setk]: v });
+    });
+  }
+  const chipSet = (key, options, cur, extra = "") => `<div class="chips">${options.map(([v, l]) => `<button class="chip ${String(cur) === String(v) ? "on" : ""}" data-setk="${key}" data-setv="${v}" ${v && extra ? extra : ""}>${l}</button>`).join("")}</div>`;
+
   function friendlyDate(d) {
     if (!d || isNaN(d)) return "";
     const today = new Date(); const y = new Date(); y.setDate(today.getDate() - 1);
@@ -197,8 +239,23 @@
     else { level = "ok"; headline = cam.uploading ? "Uploading footage" : "Everything's working"; note = `Checked in ${ago(ov.status_at)} · on ${pi.wifi_ssid || "WiFi"}`; }
     const usb = cam.usb || {};
     const carOk = cam.usb_link === "configured";
+    const outage = fresh && onStarlink ? d.outage : null;
+    if (outage && level !== "bad") { level = "warn"; headline = "Starlink dropped out"; note = `No service for ${durShort(outage.seconds)} (${outage.cause}). It usually comes back on its own.`; }
     const motion = (s && s.motion) || null;
-    return { s, fresh, pi, d, link, cam, usb, carOk, motion, onStarlink, level, headline, note };
+    return { s, fresh, pi, d, link, cam, usb, carOk, motion, onStarlink, level, headline, note, outage };
+  }
+  // Plain-language "what can I do on this connection right now"
+  function worksNow(D) {
+    if (!D.fresh) return [];
+    const { pi, d } = D;
+    if (!pi.internet) return [["No internet", "bad"]];
+    if (!D.onStarlink) return [[pi.network === "home" ? "On home WiFi" : "On " + (pi.wifi_ssid || "WiFi"), "ok"]];
+    if (D.outage || d.state !== "CONNECTED") return [["Calls: not right now", "bad"], ["Streaming: not right now", "bad"]];
+    const ping = d.ping_ms || 999, drop = d.drop_pct || 0, blocked = d.currently_obstructed;
+    const calls = blocked || drop > 4 || ping > 120 ? "bad" : drop > 1 || ping > 70 ? "warn" : "ok";
+    const stream = blocked || drop > 8 ? "warn" : "ok";
+    const word = { ok: "good", warn: "may be choppy", bad: "rough" };
+    return [[`Video calls: ${word[calls]}`, calls], [`Streaming: ${stream === "ok" ? "good" : "may buffer"}`, stream], [`Browsing: good`, "ok"]];
   }
   function qualityBars(d, fresh) {
     if (!fresh || !d.reachable) return 0;
@@ -217,7 +274,7 @@
   const TABS = [
     ["home", "Home", "home"], ["footage", "Footage", "film"], ["starlink", "Starlink", "sat"], ["map", "Map", "map"], ["pi", "Pi", "cpu"],
   ];
-  const TITLES = { home: "Car Atlas", footage: "Footage", starlink: "Starlink", map: "Coverage map", pi: "Pi", settings: "Settings" };
+  const TITLES = { home: "Car Atlas", footage: "Footage", starlink: "Starlink", map: "Coverage map", pi: "Pi", settings: "Settings", activity: "Activity", drive: "Drive mode" };
   function renderShell() {
     $app.innerHTML = `
       <header class="topbar">
@@ -248,7 +305,10 @@
     setTitle();
     const v = document.getElementById("view");
     v.className = "";
-    const fn = { home: renderHome, footage: renderFootage, starlink: renderStarlink, map: renderMap, pi: renderPi, settings: renderSettings }[state.route] || renderHome;
+    v.onclick = null;
+    document.body.classList.toggle("drive-mode", state.route === "drive");
+    if (state.route !== "drive") releaseWake();
+    const fn = { home: renderHome, footage: renderFootage, starlink: renderStarlink, map: renderMap, pi: renderPi, settings: renderSettings, activity: renderActivity, drive: renderDrive }[state.route] || renderHome;
     fn(v);
   }
 
@@ -309,11 +369,39 @@
   function clipCard(c) {
     const d = folderDate(c.folder);
     const img = c.has_thumb ? `<img loading="lazy" alt="" src="/api/clips/${c.id}/thumb">` : ic(c.kind === "sentry" ? "shield" : "film");
-    return `<a class="clip" href="${esc(c.drive_url || DRIVE[c.kind] || DRIVE.root)}" target="_blank" rel="noopener">
+    return `<a class="clip" data-clip="${c.id}" href="${esc(c.drive_url || DRIVE[c.kind] || DRIVE.root)}" target="_blank" rel="noopener">
       <div class="thumb">${img}<span class="tag ${esc(c.kind)}">${kindLabel[c.kind] || "Clip"}</span></div>
       <div class="meta"><div class="reason">${esc(reasonText(c))}</div>
       <div class="sub">${esc(friendlyDate(d) || ago(c.uploaded_at))}${c.city ? " · " + esc(c.city) : ""}</div>
       <div class="sub num">${fmtN(c.size_mb, 0, " MB")}</div></div></a>`;
+  }
+
+  const CAM_NAMES = { front: "Front", back: "Back", left_repeater: "Left side", right_repeater: "Right side", left_pillar: "Left pillar", right_pillar: "Right pillar" };
+  function clipSheet(c) {
+    let files = [];
+    try { files = JSON.parse(c.files || "[]") || []; } catch { files = []; }
+    const minutes = [...new Set(files.map((f) => f[0]))];
+    // Open on the minute the event happened in (Tesla saves about 10 minutes leading up to it).
+    let pick = minutes[0];
+    if (c.event_ts) { const key = String(c.event_ts).replace("T", "_").replace(/:/g, "-").slice(0, 19); pick = minutes.find((m) => m <= key) || pick; }
+    const d = folderDate(c.folder);
+    const minuteLabel = (m) => { const x = folderDate(m); return x ? x.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : m; };
+    const camsFor = (m) => files.filter((f) => f[0] === m).map((f) => `<a class="btn" href="https://drive.google.com/file/d/${esc(f[2])}/view" target="_blank" rel="noopener">${esc(CAM_NAMES[f[1]] || f[1])}</a>`).join("");
+    sheet(`<h2>${esc(reasonText(c))}</h2>
+      <div class="muted">${esc(friendlyDate(d) || ago(c.uploaded_at))}${c.city ? " · " + esc(c.city) : ""} · ${esc(gbText(c.size_mb || 0))}${c.network ? ` · sent over ${c.network === "starlink" ? "Starlink" : c.network === "home" ? "home WiFi" : "WiFi"}` : ""}</div>
+      ${c.has_thumb ? `<img class="clip-thumb" alt="" src="/api/clips/${c.id}/thumb">` : ""}
+      ${minutes.length ? `<div><div class="small muted" style="margin-bottom:6px">Jump straight to a camera</div>
+        ${minutes.length > 1 ? `<div class="chips scroll" id="minPick">${minutes.slice(0, 12).map((m) => `<button class="chip ${m === pick ? "on" : ""}" data-min="${esc(m)}">${esc(minuteLabel(m))}</button>`).join("")}</div>` : ""}
+        <div class="cams" id="camBtns">${camsFor(pick)}</div></div>` : ""}
+      <div class="row">
+        <a class="btn primary" style="flex:1" href="${esc(c.drive_url || DRIVE[c.kind] || DRIVE.root)}" target="_blank" rel="noopener">${ic("drive")} Open folder in Drive</a>
+        ${c.lat !== null && c.lat !== undefined ? `<a class="btn" style="flex:1" href="https://maps.apple.com/?ll=${c.lat},${c.lon}&q=${encodeURIComponent(reasonText(c))}" target="_blank" rel="noopener">${ic("pin")} Where</a>` : ""}
+      </div>`, (el) => {
+      el.querySelectorAll("[data-min]").forEach((b) => b.onclick = () => {
+        el.querySelectorAll("[data-min]").forEach((x) => x.classList.toggle("on", x === b));
+        el.querySelector("#camBtns").innerHTML = camsFor(b.dataset.min);
+      });
+    });
   }
 
   function renderHome(v) {
@@ -339,7 +427,10 @@
         <div class="headline">${esc(D.headline)}</div>
         ${chainHtml(D)}
         <div class="note">${esc(D.note)}</div>
+        ${worksNow(D).length ? `<div class="caps">${worksNow(D).map(([t, l]) => `<span class="cap ${l}">${ic(l === "ok" ? "check" : "alert")}${esc(t)}</span>`).join("")}${D.onStarlink && D.d.devices ? `<span class="cap">${ic("users")}${D.d.devices.count} on the car WiFi</span>` : ""}</div>` : ""}
       </section>
+
+      ${todayCard(D)}
 
       <section class="tiles wide">
         <a class="tile ${camLevel}" href="#footage"><span class="stripe"></span>
@@ -355,14 +446,17 @@
           <span class="v num">${D.fresh ? fmtN(temp, 0, "°C") : "—"}</span>
           <span class="s">${D.fresh ? (temp >= 80 ? "Hot! Check the glovebox" : temp >= 70 ? "Warm" : "Cool and happy") : "Off while the car sleeps"}</span></a>
         <a class="tile" href="#starlink"><span class="stripe"></span>
-          <span class="k">${ic("data")} Data today</span>
-          <span class="v num">${today.down_mb !== undefined ? fmtN((today.down_mb || 0) + (today.up_mb || 0), 0, " MB") : "—"}</span>
-          <span class="s">${today.clips_mb ? `${fmtN(today.clips_mb, 0)} MB was footage` : "Starlink usage"}</span></a>
+          <span class="k">${ic("data")} ${ov.plan ? "Data plan" : "Data today"}</span>
+          <span class="v num">${ov.plan ? `${ov.plan.pct}%` : today.down_mb !== undefined && today.down_mb !== null ? gbText((today.down_mb || 0) + (today.up_mb || 0)) : "—"}</span>
+          <span class="s">${ov.plan ? `${ov.plan.used_gb} of ${ov.plan.gb} GB this month` : today.clips_mb ? `${fmtN(today.clips_mb, 0)} MB was footage` : "Starlink usage"}</span></a>
       </section>
 
-      <section class="actions wide">
+      <section class="actions six wide">
         <button class="btn" id="qaSave">${ic("save")}Save last<br>10 min</button>
-        <a class="btn" href="#map" id="qaFind">${ic("pin")}Find my car</a>
+        <button class="btn" id="qaSpeed">${ic("gauge")}Speed<br>test</button>
+        <button class="btn" id="qaWifi">${ic("qr")}Share<br>WiFi</button>
+        <a class="btn" href="#drive">${ic("wheel")}Drive<br>mode</a>
+        <button class="btn" id="qaCheck">${ic("pulse")}Health<br>check</button>
         <button class="btn" id="qaDish">${ic("power")}Restart<br>Starlink</button>
       </section>
 
@@ -380,13 +474,136 @@
       </section>
 
       <section class="card">
-        <div class="card-head"><h2>Activity</h2><span class="muted small">${(ov.alerts || []).length ? "Latest first" : ""}</span></div>
+        <div class="card-head"><h2>Activity</h2><a class="small" href="#activity">See all</a></div>
         ${alertsList((ov.alerts || []).slice(0, 5))}
       </section>`;
 
     document.getElementById("qaSave").onclick = () => saveRecentSheet();
     document.getElementById("qaDish").onclick = () => runCommand("restart_dish");
-    document.getElementById("qaFind").onclick = () => { state.focusCar = true; };
+    document.getElementById("qaSpeed").onclick = () => runSpeedTest();
+    document.getElementById("qaWifi").onclick = () => wifiSheet();
+    document.getElementById("qaCheck").onclick = () => runDiagnostic("doctor");
+    v.querySelectorAll("[data-clip]").forEach((a) => a.onclick = (e) => { e.preventDefault(); const c = (ov.clips || []).find((x) => String(x.id) === a.dataset.clip); if (c) clipSheet(c); });
+  }
+
+  // Today at a glance (plus the last 7 days in one line)
+  function todayCard(D) {
+    const ov = state.ov || {};
+    const t = ov.today || {}, w = ov.week || {}, drops = ov.drops_today || {};
+    if (!ov.status_at) return "";
+    const goodPct = (o) => (o.starlink_s > 120 ? Math.round((100 * (o.good_s || 0)) / o.starlink_s) : null);
+    const wh = t.energy_wh || 0;
+    const cell = (k, v, sub) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+    const gp = goodPct(t), wgp = goodPct(w);
+    return `<section class="card wide">
+      <div class="card-head"><h2>Today</h2>${ov.session ? `<span class="pill ok live">Awake ${esc(durShort(ov.server_time - ov.session.start))}</span>` : `<span class="muted small">${esc(new Date().toLocaleDateString([], { weekday: "long" }))}</span>`}</div>
+      <div class="stats three">
+        ${cell("Car awake", t.awake_s ? durShort(t.awake_s) : "—")}
+        ${cell("Starlink good", gp === null ? "—" : gp + "%", drops.count ? `${drops.count} drop${drops.count === 1 ? "" : "s"} · ${durShort(drops.seconds)}` : gp === null ? "" : "no drops")}
+        ${cell("Data used", t.down_mb || t.up_mb ? gbText((t.down_mb || 0) + (t.up_mb || 0)) : "—")}
+        ${cell("Clips saved", ov.clips_today || 0)}
+        ${cell("Starlink power", wh ? (wh >= 1000 ? (wh / 1000).toFixed(2) + " kWh" : Math.round(wh) + " Wh") : "—", wh ? `about ${(wh / 10 / BATTERY_KWH).toFixed(wh / 10 / BATTERY_KWH < 1 ? 2 : 1)}% of the battery` : "")}
+        ${cell("Speed", ov.speedtest_last ? `${Math.round(ov.speedtest_last.down)} Mbps` : "—", ov.speedtest_last ? `tested ${ago(ov.speedtest_last.at)}` : "no test yet")}
+      </div>
+      ${w.awake_s ? `<div class="muted small">Last 7 days: awake ${esc(durShort(w.awake_s))}${wgp !== null ? ` · Starlink good ${wgp}%` : ""} · ${esc(gbText(w.data_mb || 0))} · ${w.drops || 0} drop${w.drops === 1 ? "" : "s"}${w.energy_wh ? ` · ${(w.energy_wh / 1000).toFixed(1)} kWh` : ""}</div>` : ""}
+    </section>`;
+  }
+
+  // ---------- speed test ----------
+  async function runSpeedTest() {
+    const D = derive();
+    if (D.fresh && D.d.speedtest_running) { toast("A speed test is already running."); return; }
+    const yes = await confirmSheet({ title: "Run a speed test?", body: `The Pi measures download, upload and ping on ${D.fresh && !D.onStarlink ? "the WiFi it's on right now" : "the Starlink"}. It takes about 20 seconds and uses around 75 MB of data.${D.fresh ? "" : " The car is asleep, so it runs the next time the Pi is on."}`, yes: "Run it" });
+    if (!yes) return;
+    try {
+      const r = await api("/api/commands", { method: "POST", body: { type: "speedtest" } });
+      toast(r.note || (D.fresh ? "Running. The result shows up here in about half a minute." : "Queued for the next time the car is awake."));
+      watchCommand(r.id);
+    } catch (e) { if (e.message !== "auth") toast(e.message); }
+  }
+  // Keep an eye on something we just asked the Pi to do, so the screen updates the moment it's done.
+  function watchCommand(id, onDone) {
+    let tries = 0;
+    clearInterval(state.cmdTimer);
+    state.cmdTimer = setInterval(async () => {
+      tries++;
+      try {
+        const r = await api(`/api/commands/${id}`);
+        const c = r.command;
+        if (["done", "failed", "expired", "cancelled"].includes(c.status)) {
+          clearInterval(state.cmdTimer);
+          await refresh();
+          if (onDone) onDone(c, r.label); else if (c.result) toast(c.result, 6000);
+          if (!document.querySelector(".scrim")) render();
+        }
+      } catch { /* keep waiting */ }
+      if (tries > 40) clearInterval(state.cmdTimer);
+    }, 4000);
+  }
+
+  // ---------- diagnostics (what you used to need SSH for) ----------
+  async function runDiagnostic(type) {
+    const D = derive();
+    try {
+      const r = await api("/api/commands", { method: "POST", body: { type } });
+      toast(D.fresh ? "Asked the Pi. The report opens here when it's ready (under a minute)." : "The car is asleep. The report will be waiting in the Pi tab after the next drive.", 5000);
+      watchCommand(r.id, (c, label) => { if (c.output) outputSheet(c, label); else toast(c.result || "Done"); });
+    } catch (e) { if (e.message !== "auth") toast(e.message); }
+  }
+  function outputSheet(c, label) {
+    sheet(`<h2>${esc(label || "Report")}</h2><div class="muted small">${esc(friendlyDate(new Date((c.done || c.created) * 1000)))}</div>
+      <pre class="report">${esc(c.output || "")}</pre>
+      <div class="row"><button class="btn" style="flex:1" data-copy>${ic("copy")} Copy</button><button class="btn primary" style="flex:1" data-close>Close</button></div>`, (el, close) => {
+      el.querySelector("[data-close]").onclick = close;
+      el.querySelector("[data-copy]").onclick = () => copyText(c.output || "");
+    });
+  }
+  async function openCommandOutput(id) {
+    try { const r = await api(`/api/commands/${id}`); outputSheet(r.command, r.label); } catch (e) { if (e.message !== "auth") toast(e.message); }
+  }
+
+  // ---------- share the car WiFi ----------
+  function wifiQrSvg(ssid, password) {
+    if (typeof qrcode === "undefined") return "";
+    const q = (v) => String(v).replace(/([\\;,:"])/g, "\\$1");
+    const qr = qrcode(0, "M");
+    qr.addData(`WIFI:T:${password ? "WPA" : "nopass"};S:${q(ssid)};${password ? `P:${q(password)};` : ""};`);
+    qr.make();
+    const n = qr.getModuleCount();
+    let path = "";
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (qr.isDark(y, x)) path += `M${x + 2},${y + 2}h1v1h-1z`;
+    return `<svg class="qr" viewBox="0 0 ${n + 4} ${n + 4}" role="img" aria-label="QR code to join ${esc(ssid)}"><rect width="100%" height="100%" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
+  }
+  async function wifiSheet(edit) {
+    let w = null;
+    try { w = (await api("/api/settings/wifi")).wifi; } catch (e) { if (e.message === "auth") return; }
+    if (!w || edit) {
+      const ssid = (w && w.ssid) || "JonesyStarlink";
+      sheet(`<h2>Share the car WiFi</h2><div class="muted">Type the Starlink WiFi name and password once. After that, anyone in the car can point their camera at the code and join. It's kept in your private Car Atlas account.</div>
+        <form id="wifiForm" class="steps">
+          <div class="field"><label for="wSsid">WiFi name</label><input class="input" id="wSsid" value="${esc(ssid)}" required autocapitalize="off" autocorrect="off"></div>
+          <div class="field"><label for="wPass">Password</label><input class="input" id="wPass" value="${esc((w && w.password) || "")}" autocapitalize="off" autocorrect="off" autocomplete="off"></div>
+          <button class="btn primary block" type="submit">Save and show the code</button>
+        </form>`, (el, close) => {
+        el.querySelector("#wifiForm").onsubmit = async (e) => {
+          e.preventDefault();
+          try {
+            await api("/api/settings/wifi", { method: "POST", body: { ssid: el.querySelector("#wSsid").value.trim(), password: el.querySelector("#wPass").value } });
+            if (state.ov) state.ov.wifi_set = true;
+            close(); wifiSheet();
+          } catch (er) { if (er.message !== "auth") toast(er.message); }
+        };
+      });
+      return;
+    }
+    sheet(`<h2>Join the car WiFi</h2>
+      <div class="qr-wrap">${wifiQrSvg(w.ssid, w.password) || `<div class="muted">Couldn't draw the code. Check your connection and try again.</div>`}</div>
+      <div style="text-align:center"><div style="font-weight:600">${esc(w.ssid)}</div><div class="num muted">${esc(w.password || "No password")}</div></div>
+      <div class="muted small" style="text-align:center">Point a phone camera at the code and tap “Join”.</div>
+      <div class="row"><button class="btn" style="flex:1" data-copy>${ic("copy")} Copy password</button><button class="btn ghost" style="flex:1" data-edit>Change</button></div>`, (el, close) => {
+      el.querySelector("[data-copy]").onclick = () => copyText(w.password || "");
+      el.querySelector("[data-edit]").onclick = () => { close(); wifiSheet(true); };
+    });
   }
 
   function alertsList(alerts) {
@@ -446,7 +663,7 @@
       let args = {}; try { args = JSON.parse(c.args || "{}"); } catch {}
       const lbl = (labels && labels[c.type]) || c.type;
       return `<li class="item"><div class="body"><div class="t">${esc(lbl)}${args.minutes ? ` (${args.minutes} min)` : ""}</div>
-        <div class="m">${esc(c.result || ago(c.created))}</div></div><span class="pill ${cls}">${esc(txt)}</span></li>`;
+        <div class="m">${esc(c.result || ago(c.created))}</div></div>${c.has_output ? `<button class="chip" data-out="${c.id}">Read</button>` : `<span class="pill ${cls}">${esc(txt)}</span>`}</li>`;
     }).join("")}</ul>`;
   }
 
@@ -525,7 +742,10 @@
     if (!D.s) status = "Waiting for the Pi to check in.";
     else if (cam.gadget === "unsupported") { status = "This Pi can't act as a USB drive yet, so the car is NOT saving footage to it. Keep a flash drive in the glovebox port."; cls = "bad"; }
     else if (cam.gadget === "error") { status = "The dashcam drive hit a problem: " + (cam.detail || "unknown") + "."; cls = "bad"; }
-    else if (cam.uploading) status = `Uploading ${cam.uploading.kind === "sentry" ? "a Sentry event" : "a dashcam clip"} (${cam.uploading.mb} MB)…`;
+    else if (cam.uploading) {
+      const up = cam.uploading;
+      status = `Uploading ${up.kind === "sentry" ? "a Sentry event" : "a dashcam clip"} (${gbText(up.mb)})${up.pct ? ` · ${up.pct}%` : ""}${up.eta_s ? ` · about ${durShort(up.eta_s)} left` : ""}${up.kbps ? ` · ${(up.kbps / 1000).toFixed(1)} Mbps` : ""}`;
+    }
     else if (cam.waiting_for) { status = "Clips are waiting for " + cam.waiting_for + "."; cls = "warn"; }
     else if (cam.gadget === "attached" && !D.carOk && D.fresh) { status = "The Pi is offering the drive, but the car hasn't connected to it. See “Car connection” below."; cls = "bad"; }
     else status = cam.gadget === "attached" ? (D.carOk ? "Car is recording to the Pi. Saved clips and Sentry events upload on their own." : "Ready. Saved clips and Sentry events upload on their own.") : "Checking the dashcam drive…";
@@ -536,9 +756,10 @@
         <div class="card-head"><h2>Dashcam drive</h2>
           <span class="pill ${cam.gadget === "attached" ? (D.carOk || !D.fresh ? "ok" : "bad") : cam.gadget === "unsupported" || cam.gadget === "error" ? "bad" : ""}">${cam.gadget === "attached" ? (D.carOk ? "Car connected" : D.fresh ? "Car not connected" : "Ready") : cam.gadget === "unsupported" ? "Not supported" : D.s ? "Checking" : "Offline"}</span></div>
         <div class="banner ${cls}">${ic(cls === "bad" ? "alert" : cam.uploading ? "upload" : "rec")}<div>${esc(status)}</div></div>
-        ${cam.uploading ? `<div class="meter indet"><span></span></div>` : ""}
+        ${cam.uploading ? (cam.uploading.pct ? `<div class="meter"><span style="width:${cam.uploading.pct}%;background:var(--accent)"></span></div>` : `<div class="meter indet"><span></span></div>`) : ""}
+        ${D.fresh && D.carOk ? `<div class="row small" style="gap:8px"><span class="dot ${D.usb.writing ? "rec-on" : ""}" style="background:${D.usb.writing ? "var(--bad)" : "var(--line)"}"></span><span class="muted">${D.usb.writing ? `The car is writing video to the Pi (last write ${esc(ago(D.usb.last_write_epoch))})` : D.usb.last_write_epoch ? `Car connected. Last video written ${esc(ago(D.usb.last_write_epoch))}` : "Car connected"}${D.usb.drops ? ` · connection reset ${D.usb.drops}× since the Pi turned on` : ""}</span></div>` : ""}
         <div class="stats">
-          <div class="stat"><div class="k">Waiting</div><div class="v">${pend.dashcam || 0} dash · ${pend.sentry || 0} sentry</div></div>
+          <div class="stat"><div class="k">Waiting</div><div class="v">${pend.dashcam || 0} dash · ${pend.sentry || 0} sentry</div>${cam.pending_mb ? `<div class="s">${esc(gbText(cam.pending_mb))}${D.onStarlink && cam.bwlimit && cam.bwlimit !== "0" ? ` · about ${esc(durShort(cam.pending_mb * 1e6 / ({ "190k": 190e3, "375k": 375e3, "1M": 1e6 }[cam.bwlimit] || 375e3)))} on Starlink` : ""}</div>` : ""}</div>
           <div class="stat"><div class="k">In Drive</div><div class="v">${(counts.dashcam || 0) + (counts.sentry || 0) + (counts.requested || 0)} clips</div></div>
           <div class="stat"><div class="k">Uploaded</div><div class="v">${fmtN((counts.total_mb || 0) / 1000, 1, " GB")}</div></div>
           <div class="stat"><div class="k">Over Starlink today</div><div class="v">${fmtN(cam.starlink_uploaded_today_mb, 0, " MB")}</div></div>
@@ -557,12 +778,29 @@
       </section>
 
       <section class="card">
-        <div class="card-head"><h2>Google Drive</h2></div>
+        <div class="card-head"><h2>Upload rules</h2><span class="pill ${S().uploads_paused ? "warn" : "ok"}">${S().uploads_paused ? "Paused" : "On"}</span></div>
+        ${toggleRow("uploads_paused", "Pause all uploads", "Clips stay safe on the Pi and upload when you turn this back off.", S().uploads_paused)}
+        ${toggleRow("uploads_on_starlink", "Saved clips over Starlink", "Off = they wait for home WiFi.", S().uploads_on_starlink)}
+        ${toggleRow("sentry_on_starlink", "Sentry events over Starlink", "Off = they wait for home WiFi.", S().sentry_on_starlink)}
+        <div><div class="small muted" style="margin-bottom:6px">Upload speed on Starlink (lower leaves more for phones)</div>
+          ${chipSet("starlink_speed", [["slow", "1.5 Mbps"], ["normal", "3 Mbps"], ["fast", "8 Mbps"], ["max", "No limit"]], S().starlink_speed)}</div>
+        <div><div class="small muted" style="margin-bottom:6px">Most footage per day over Starlink</div>
+          ${chipSet("starlink_cap_mb", [[1000, "1 GB"], [2000, "2 GB"], [5000, "5 GB"], [10000, "10 GB"], [100000, "No limit"]], S().starlink_cap_mb)}</div>
+        <div class="muted small">Home WiFi is always full speed with no limit. “Save recent footage” always goes right away.${ov.settings_applied === false ? " <b>Waiting for the Pi to pick up your last change.</b>" : ""}</div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Google Drive</h2>${D.s && D.s.drive && D.s.drive.free_gb !== null && D.s.drive.free_gb !== undefined ? `<span class="pill ${D.s.drive.free_gb < 5 ? "bad" : D.s.drive.free_gb < 15 ? "warn" : "ok"}">${D.s.drive.free_gb} GB free</span>` : ""}</div>
+        ${D.s && D.s.drive && D.s.drive.total_gb ? `<div><div class="row between small"><span class="muted">Drive storage</span><span class="num">${D.s.drive.used_gb} of ${D.s.drive.total_gb} GB used</span></div>
+          <div class="meter" style="margin-top:6px"><span style="width:${Math.min(100, Math.round(100 * D.s.drive.used_gb / D.s.drive.total_gb))}%;background:${D.s.drive.free_gb < 5 ? "var(--bad)" : D.s.drive.free_gb < 15 ? "var(--warn)" : "var(--accent)"}"></span></div></div>` : ""}
         <div class="row">
           <a class="btn" style="flex:1" href="${DRIVE.root}" target="_blank" rel="noopener">${ic("drive")} All</a>
           <a class="btn" style="flex:1" href="${DRIVE.dashcam}" target="_blank" rel="noopener">Dashcam</a>
           <a class="btn" style="flex:1" href="${DRIVE.sentry}" target="_blank" rel="noopener">Sentry</a>
         </div>
+        <div><div class="small muted" style="margin-bottom:6px">Keep footage in Drive for</div>
+          ${chipSet("retention_days", [[0, "Forever"], [30, "30 days"], [90, "90 days"], [180, "6 months"], [365, "1 year"]], S().retention_days || 0, 'data-ctitle="Auto-clear old footage?" data-confirm="Once a day the Pi moves footage older than this out of Google Drive and into Drive\u2019s trash (Google keeps trash for 30 days). Anything you want to keep longer should be moved out of the Tesla Footage folder."')}</div>
+        ${cam.retention && cam.retention.files_removed ? `<div class="muted small">Last cleanup ${esc(ago(cam.retention.at))}: ${cam.retention.files_removed} old files moved to Drive trash.</div>` : ""}
       </section>
 
       <section class="card wide">
@@ -573,6 +811,14 @@
 
     document.getElementById("fSave").onclick = saveRecentSheet;
     v.querySelectorAll("[data-cmd]").forEach((b) => b.onclick = () => runCommand(b.dataset.cmd));
+    bindSettings(v);
+    v.onclick = (e) => {
+      const a = e.target.closest("[data-clip]");
+      if (!a) return;
+      e.preventDefault();
+      const c = (state.clips || []).concat(ov.clips || []).find((x) => String(x.id) === a.dataset.clip);
+      if (c) clipSheet(c);
+    };
     v.querySelectorAll("[data-k]").forEach((b) => b.onclick = async () => {
       state.footKind = b.dataset.k;
       v.querySelectorAll("[data-k]").forEach((x) => x.classList.toggle("on", x === b));
@@ -627,6 +873,7 @@
   async function renderStarlink(v) {
     const D = derive();
     const d = D.d;
+    const ov = state.ov || {};
     const q = qualityBars(d, D.fresh && D.onStarlink);
     const qText = ["No signal", "Searching", "Weak", "Good", "Great"][q];
     v.className = "two";
@@ -650,7 +897,35 @@
           ${gauge(D.fresh && D.onStarlink ? d.drop_pct : null, 20, "Dropped", "%", true, 1, 5)}
           ${gauge(D.fresh && D.onStarlink ? d.obstructed_pct : null, 20, "Sky blocked", "%", true, 3, 10)}
         </div>
+        ${D.outage ? `<div class="banner bad">${ic("alert")}<div><b>No service for ${esc(durShort(D.outage.seconds))}.</b> Reason: ${esc(D.outage.cause)}.</div></div>` : ""}
+        ${worksNow(D).length && D.onStarlink ? `<div class="caps">${worksNow(D).map(([t, l]) => `<span class="cap ${l}">${ic(l === "ok" ? "check" : "alert")}${esc(t)}</span>`).join("")}${d.devices ? `<span class="cap">${ic("users")}${d.devices.count} device${d.devices.count === 1 ? "" : "s"} on the WiFi</span>` : ""}</div>` : ""}
         ${(d.alerts || []).length && D.fresh ? `<div class="banner warn">${ic("alert")}<div>Dish says: ${esc(d.alerts.map((a) => a.replace(/_/g, " ")).join(", "))}</div></div>` : ""}
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Speed test</h2><span class="muted small">${ov.speedtest_last ? esc(ago(ov.speedtest_last.at)) : ""}</span></div>
+        ${ov.speedtest_last ? `<div class="stats three">
+          <div class="stat"><div class="k">Download</div><div class="v big">${fmtN(ov.speedtest_last.down, 0)}</div><div class="s">Mbps</div></div>
+          <div class="stat"><div class="k">Upload</div><div class="v big">${fmtN(ov.speedtest_last.up, 0)}</div><div class="s">Mbps</div></div>
+          <div class="stat"><div class="k">Ping</div><div class="v big">${fmtN(ov.speedtest_last.ping, 0)}</div><div class="s">ms</div></div></div>` :
+          `<div class="muted small">No test yet. The Pi runs a small one once a day on Starlink, or tap the button.</div>`}
+        <div class="chart-box short"><canvas id="cSpeed"></canvas></div>
+        <button class="btn primary block" id="slSpeed" ${D.fresh && d.speedtest_running ? "disabled" : ""}>${ic("gauge")} ${D.fresh && d.speedtest_running ? "Test running…" : "Run speed test"}</button>
+        ${toggleRow("auto_speedtest", "Daily automatic test", "One small test a day (about 25 MB) so you can see the trend.", S().auto_speedtest)}
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Sky view</h2><span class="pill" id="skyPill">—</span></div>
+        <div class="sky-wrap"><canvas id="sky" width="246" height="246" aria-label="What the dish can see of the sky"></canvas></div>
+        <div class="row small" style="gap:14px;justify-content:center"><span class="row" style="gap:6px"><span class="sw" style="background:var(--beam)"></span>Clear</span><span class="row" style="gap:6px"><span class="sw" style="background:var(--bad)"></span>Blocked</span><span class="row" style="gap:6px"><span class="sw" style="background:var(--surface-2);border:1px solid var(--line)"></span>Not checked yet</span></div>
+        <div class="muted small" id="skyNote">This is the dish's own picture of the sky from the back window. Red patches are where the roof, pillars or trees get in the way.</div>
+      </section>
+
+      <section class="card wide">
+        <div class="card-head"><h2>Drops</h2><span class="pill ${(ov.drops_today || {}).count ? "warn" : "ok"}">${(ov.drops_today || {}).count ? `${ov.drops_today.count} today · ${esc(durShort(ov.drops_today.seconds))}` : "None today"}</span></div>
+        <div class="muted small">A drop is 30 seconds or more with no service after the Starlink was already working.</div>
+        <h3>Time with a good signal, last 14 days (%)</h3><div class="chart-box short"><canvas id="cGood"></canvas></div>
+        <div id="dropList"><div class="skeleton" style="min-height:60px"></div></div>
       </section>
 
       <section class="card wide">
@@ -666,12 +941,20 @@
         <div class="card-head"><h2>Data used</h2><span class="muted small">last 30 days</span></div>
         <div class="stats" id="usageStats"><div class="stat"><div class="k">Today</div><div class="v">—</div></div></div>
         <div class="chart-box"><canvas id="cUsage"></canvas></div>
+        ${ov.plan ? `<div><div class="row between small"><span class="muted">Data plan since ${esc(ov.plan.cycle_start.slice(5).replace("-", "/"))}</span><span class="num">${ov.plan.used_gb} of ${ov.plan.gb} GB · ${ov.plan.pct}%</span></div>
+          <div class="meter" style="margin-top:6px"><span style="width:${Math.min(100, ov.plan.pct)}%;background:${ov.plan.pct >= 90 ? "var(--bad)" : ov.plan.pct >= 75 ? "var(--warn)" : "var(--accent)"}"></span></div>
+          <div class="muted small" style="margin-top:6px">About ${ov.plan.per_day_gb} GB a day so far. At this pace: ${Math.round(ov.plan.per_day_gb * 30)} GB for the month. Counts what the Pi sees while it's on.</div></div>` : ""}
+        <button class="btn block" id="planBtn">${ic("data")} ${ov.plan ? "Change data plan" : "Set a monthly data limit"}</button>
+        ${ov.plan ? toggleRow("plan_protect", "Protect the plan", "At 90% used, footage uploads wait for home WiFi.", S().plan_protect) : ""}
       </section>
 
       <section class="card">
         <div class="card-head"><h2>Dish details</h2></div>
         <dl class="kv">
           <dt>Power draw</dt><dd>${fmtN(d.power_w, 0, " W")}</dd>
+          <dt>Energy today</dt><dd>${d.energy_today_wh ? `${Math.round(d.energy_today_wh)} Wh (≈${(d.energy_today_wh / 10 / BATTERY_KWH).toFixed(2)}% battery)` : "—"}</dd>
+          <dt>Devices on the WiFi</dt><dd>${d.devices ? d.devices.count : "—"}</dd>
+          <dt>Dish pointing</dt><dd>${d.elevation !== null && d.elevation !== undefined ? `${fmtN(d.elevation, 0)}° up` : "—"}</dd>
           <dt>Speed right now</dt><dd>${fmtN(d.down_mbps, 1)} ↓ / ${fmtN(d.up_mbps, 1)} ↑ Mbps</dd>
           <dt>GPS satellites</dt><dd>${fmtN(d.gps_sats)}</dd>
           <dt>On for</dt><dd>${dur(d.uptime_s)}</dd>
@@ -684,17 +967,21 @@
 
     v.querySelectorAll("[data-h]").forEach((b) => b.onclick = () => { state.stRange = Number(b.dataset.h); render(); });
     document.getElementById("slRestart").onclick = () => runCommand("restart_dish");
+    document.getElementById("slSpeed").onclick = () => runSpeedTest();
+    document.getElementById("planBtn").onclick = () => planSheet();
+    bindSettings(v);
+    loadStarlinkExtras();
 
     try {
       const [h, u] = await Promise.all([api(`/api/history?hours=${state.stRange}`), api("/api/usage?days=30")]);
       if (state.route !== "starlink") return;
       const rows = h.rows.filter((r) => r.net === "starlink");
       const pts = (k) => rows.map((r) => ({ x: r.ts, y: r[k] }));
-      const accent = cssVar("--accent"), beam = cssVar("--beam"), warn = cssVar("--warn"), bad = cssVar("--bad");
+      const accent = cssVar("--accent"), beam = cssVar("--beam");
       document.getElementById("histNote").textContent = rows.length ? `${rows.length} check-ins while on Starlink. Gaps are times the car was asleep.` : "No Starlink data in this window yet. It fills in as you drive.";
       state.charts.push(new Chart(document.getElementById("cPing"), { type: "line", data: { datasets: [lineDs("Ping", pts("ping"), accent, true)] }, options: chartOpts("") }));
       state.charts.push(new Chart(document.getElementById("cThru"), { type: "line", data: { datasets: [lineDs("Down", pts("down"), beam, true), lineDs("Up", pts("up"), accent)] }, options: chartOpts("", { legend: true }) }));
-      state.charts.push(new Chart(document.getElementById("cDrop"), { type: "line", data: { datasets: [lineDs("Dropped", pts("drop_pct"), bad, true), lineDs("Sky blocked", pts("obstructed"), warn)] }, options: chartOpts("", { legend: true }) }));
+      state.charts.push(new Chart(document.getElementById("cDrop"), { type: "line", data: { datasets: [lineDs("Dropped", pts("drop_pct"), accent, true), lineDs("Sky blocked", pts("obstructed"), beam)] }, options: chartOpts("", { legend: true }) }));
       const urows = u.rows;
       const todayRow = (state.ov && state.ov.today) || {};
       const month = urows.reduce((a, r) => a + (r.down_mb || 0) + (r.up_mb || 0), 0);
@@ -712,6 +999,118 @@
           scales: { x: { stacked: true, grid: { display: false }, ticks: { color: ink, maxTicksLimit: 8 } }, y: { stacked: true, beginAtZero: true, grid: { color: grid }, ticks: { color: ink, maxTicksLimit: 5, callback: (x) => x + " MB" } } } },
       }));
     } catch (e) { /* section shows its empty note */ }
+  }
+
+  function planSheet() {
+    const cur = S();
+    sheet(`<h2>Monthly data limit</h2><div class="muted">If your Starlink plan has a data limit, put it here. You'll see how much is used, get a heads-up at 80%, and footage uploads can wait for home WiFi near the end.</div>
+      <form id="planForm" class="steps">
+        <div class="field"><label for="pGb">Plan size in GB (0 = no limit)</label><input class="input" id="pGb" type="number" inputmode="numeric" min="0" max="10000" value="${cur.plan_gb || 0}"></div>
+        <div class="field"><label for="pDay">Day of the month it resets</label><input class="input" id="pDay" type="number" inputmode="numeric" min="1" max="28" value="${cur.plan_reset_day || 1}"></div>
+        <button class="btn primary block" type="submit">Save</button>
+      </form>`, (el, close) => {
+      el.querySelector("#planForm").onsubmit = (e) => { e.preventDefault(); close(); saveSetting({ plan_gb: Number(el.querySelector("#pGb").value) || 0, plan_reset_day: Number(el.querySelector("#pDay").value) || 1 }, "Saved"); };
+    });
+  }
+  function drawSky(sky) {
+    const cv = document.getElementById("sky"), pill = document.getElementById("skyPill");
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!sky || !sky.data) { pill.textContent = "No picture yet"; document.getElementById("skyNote").textContent = "The dish builds this picture as it runs. It shows up here after the Pi has been on the Starlink for a few minutes."; return; }
+    const raw = atob(sky.data), w = sky.w, h = sky.h, cell = cv.width / w;
+    const clear = cssVar("--beam"), blocked = cssVar("--bad"), none = cssVar("--surface-2");
+    let known = 0, good = 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const b = raw.charCodeAt(y * w + x);
+      if (b === 255) { ctx.globalAlpha = 1; ctx.fillStyle = none; }
+      else { known++; const val = b / 254; if (val >= 0.5) { good++; ctx.fillStyle = clear; ctx.globalAlpha = 0.35 + 0.65 * val; } else { ctx.fillStyle = blocked; ctx.globalAlpha = 1 - val; } }
+      ctx.fillRect(x * cell, y * cell, cell + 0.5, cell + 0.5);
+    }
+    ctx.globalAlpha = 1;
+    const pct = known ? Math.round((100 * good) / known) : null;
+    pill.textContent = pct === null ? "Still scanning" : `${pct}% clear`;
+    pill.className = "pill " + (pct === null ? "" : pct >= 90 ? "ok" : pct >= 75 ? "warn" : "bad");
+    cv.title = `Updated ${ago(sky.at)}`;
+  }
+  async function loadStarlinkExtras() {
+    const grid = cssVar("--line"), ink = cssVar("--muted"), accent = cssVar("--accent"), beam = cssVar("--beam");
+    api("/api/skymap").then((r) => { if (state.route === "starlink") drawSky(r.sky); }).catch(() => {});
+    try {
+      const [sp, out] = await Promise.all([api("/api/speedtests?days=30"), api("/api/outages?days=14")]);
+      if (state.route !== "starlink") return;
+      const tests = sp.rows.slice().reverse();
+      const tip = { callbacks: { title: (items) => items.length ? new Date(items[0].parsed.x * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "", label: (c) => `${c.dataset.label}: ${Math.round(c.parsed.y)} Mbps` } };
+      if (tests.length > 1 && document.getElementById("cSpeed")) {
+        const ds = (label, key, color) => ({ label, data: tests.map((t) => ({ x: t.at, y: t[key] })), borderColor: color, backgroundColor: color, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2, tension: .25 });
+        state.charts.push(new Chart(document.getElementById("cSpeed"), { type: "line", data: { datasets: [ds("Download", "down", beam), ds("Upload", "up", accent)] },
+          options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false }, plugins: { legend: { labels: { color: ink, boxWidth: 10, usePointStyle: true } }, tooltip: tip },
+            scales: { x: { type: "linear", grid: { display: false }, ticks: { color: ink, maxTicksLimit: 5, callback: (v) => new Date(v * 1000).toLocaleDateString([], { month: "numeric", day: "numeric" }) } }, y: { beginAtZero: true, grid: { color: grid }, ticks: { color: ink, maxTicksLimit: 4 }, title: { display: true, text: "Mbps", color: ink } } } } }));
+      } else if (document.getElementById("cSpeed")) document.getElementById("cSpeed").parentElement.hidden = true;
+      const days = out.per_day.filter((r) => (r.starlink_s || 0) > 120);
+      if (days.length && document.getElementById("cGood")) {
+        state.charts.push(new Chart(document.getElementById("cGood"), { type: "bar",
+          data: { labels: days.map((r) => r.day.slice(5).replace("-", "/")), datasets: [{ label: "Good signal", data: days.map((r) => Math.round((1000 * (r.good_s || 0)) / r.starlink_s) / 10), backgroundColor: accent, borderRadius: 4, maxBarThickness: 22 }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${c.parsed.y}% good · on Starlink ${durShort(days[c.dataIndex].starlink_s)}` } } },
+            scales: { x: { grid: { display: false }, ticks: { color: ink, maxTicksLimit: 7 } }, y: { min: Math.max(0, Math.floor(Math.min(...days.map((r) => (100 * (r.good_s || 0)) / r.starlink_s)) / 10) * 10 - 10), max: 100, grid: { color: grid }, ticks: { color: ink, maxTicksLimit: 4, callback: (x) => x + "%" } } } } }));
+      } else if (document.getElementById("cGood")) document.getElementById("cGood").parentElement.hidden = true;
+      const list = document.getElementById("dropList");
+      if (list) list.innerHTML = out.rows.length ? `<ul class="list">${out.rows.slice(0, 8).map((o) => `<li class="item"><span class="dot problem"></span><div class="body"><div class="t">${esc(durShort(o.end - o.start))} without service</div><div class="m">${esc(o.cause)}</div></div><span class="when">${esc(friendlyDate(new Date(o.start * 1000)))}</span></li>`).join("")}</ul>${out.rows.length > 8 ? `<a class="small" href="#activity">See all ${out.rows.length} in Activity</a>` : ""}` : `<div class="empty">${ic("check")}<div>No drops in the last 14 days.</div></div>`;
+    } catch { /* cards keep their empty state */ }
+  }
+
+  // ---------- ACTIVITY (everything that happened, newest first) ----------
+  async function renderActivity(v) {
+    const f = state.actFilter || "all";
+    const chips = [["all", "All"], ["clip", "Clips"], ["problem", "Problems"], ["drop", "Drops"], ["awake", "Car awake"], ["info", "Updates"]];
+    v.innerHTML = `<div class="chips scroll">${chips.map(([k, l]) => `<button class="chip ${f === k ? "on" : ""}" data-f="${k}">${l}</button>`).join("")}</div>
+      <section class="card"><div id="actList"><div class="skeleton"></div></div></section>`;
+    v.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { state.actFilter = b.dataset.f; render(); });
+    try {
+      const r = await api("/api/timeline?days=14");
+      if (state.route !== "activity") return;
+      let items = r.alerts.map((a) => ({ at: a.at, kind: ["clip", "problem"].includes(a.category) ? a.category : "info", dot: a.category, t: a.title, m: a.message }))
+        .concat(r.outages.map((o) => ({ at: o.start, kind: "drop", dot: "problem", t: `Starlink dropped for ${durShort(o.end - o.start)}`, m: o.cause })))
+        .concat(r.sessions.map((x) => ({ at: x.start, kind: "awake", dot: "info", t: `Car awake for ${durShort(x.end - x.start)}`, m: x.net === "starlink" ? "On the Starlink" : "On WiFi" })))
+        .concat(r.speedtests.map((x) => ({ at: x.at, kind: "info", dot: "info", t: `Speed test: ${Math.round(x.down)} down / ${Math.round(x.up)} up`, m: `${Math.round(x.ping)} ms ping${x.auto ? " · automatic" : ""}` })));
+      if (f !== "all") items = items.filter((i) => i.kind === f);
+      items.sort((a, b) => b.at - a.at);
+      const el = document.getElementById("actList");
+      if (!items.length) { el.innerHTML = `<div class="empty">${ic("list")}<div>Nothing here in the last 14 days.</div></div>`; return; }
+      let html = "", lastDay = "";
+      for (const i of items.slice(0, 250)) {
+        const d = new Date(i.at * 1000), day = d.toDateString();
+        if (day !== lastDay) { if (lastDay) html += "</ul>"; lastDay = day; const today = new Date().toDateString() === day; html += `<h3 class="day">${today ? "Today" : esc(d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }))}</h3><ul class="list">`; }
+        html += `<li class="item"><span class="dot ${esc(i.dot)}"></span><div class="body"><div class="t">${esc(i.t)}</div><div class="m">${esc(i.m || "")}</div></div><span class="when">${esc(d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}</span></li>`;
+      }
+      el.innerHTML = html + "</ul>";
+    } catch (e) { const el = document.getElementById("actList"); if (el) el.innerHTML = `<div class="muted">Couldn't load. Pull down or tap refresh.</div>`; }
+  }
+
+  // ---------- DRIVE MODE (big, glanceable, for a phone mount or the car's browser) ----------
+  let wakeLock = null;
+  function releaseWake() { try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; }
+  function renderDrive(v) {
+    const D = derive();
+    const d = D.d;
+    const q = qualityBars(d, D.fresh && D.onStarlink);
+    const word = !D.fresh ? "Car asleep" : !D.onStarlink ? "On " + (D.pi.wifi_ssid || "WiFi") : D.outage ? "No service" : ["No signal", "Searching", "Weak", "Good", "Great"][q];
+    const lvl = !D.fresh ? "" : D.outage || q <= 1 ? "bad" : q === 2 ? "warn" : "ok";
+    if (!wakeLock && navigator.wakeLock) navigator.wakeLock.request("screen").then((l) => { wakeLock = l; }).catch(() => {});
+    v.innerHTML = `<div class="drive ${lvl}">
+      <div class="row between"><span class="pill ${lvl} ${D.fresh ? "live" : ""}">${D.fresh ? "Live" : "Offline"} · ${esc(ago(state.ov && state.ov.status_at))}</span><a class="icon-btn" href="#home" aria-label="Leave drive mode">${ic("x")}</a></div>
+      <div class="d-main"><div class="d-bars">${barsHtml(q)}</div><div class="d-word">${esc(word)}</div>
+        <div class="d-sub">${D.outage ? esc(`${durShort(D.outage.seconds)} · ${D.outage.cause}`) : D.fresh && D.onStarlink ? `<span class="num">${fmtN(d.ping_ms, 0)}</span> ms${D.motion && D.motion.driving ? ` · <span class="num">${fmtN(D.motion.speed_mph, 0)}</span> mph` : ""}` : ""}</div></div>
+      <div class="caps big">${worksNow(D).map(([t, l]) => `<span class="cap ${l}">${ic(l === "ok" ? "check" : "alert")}${esc(t)}</span>`).join("")}</div>
+      <div class="d-grid">
+        <div class="stat"><div class="k">Dashcam</div><div class="v">${!D.fresh ? "—" : D.carOk ? "Recording" : "Not connected"}</div></div>
+        <div class="stat"><div class="k">Speed in use</div><div class="v">${D.fresh && D.onStarlink ? `${fmtN(d.down_mbps, 1)} ↓ ${fmtN(d.up_mbps, 1)} ↑` : "—"}</div></div>
+        <div class="stat"><div class="k">Sky blocked</div><div class="v">${D.fresh && D.onStarlink ? fmtN(d.obstructed_pct, 1, "%") : "—"}</div></div>
+        <div class="stat"><div class="k">Pi</div><div class="v">${D.fresh ? fmtN(D.pi.cpu_temp_c, 0, "°C") : "—"}</div></div>
+      </div>
+      <button class="btn primary d-save" id="dSave">${ic("save")} Save the last 10 minutes</button>
+    </div>`;
+    document.getElementById("dSave").onclick = () => runCommand("upload_recent", { minutes: 10 });
   }
 
   // ---------- MAP ----------
@@ -852,6 +1251,21 @@
       </section>
 
       <section class="card">
+        <div class="card-head"><h2>Check on the Pi</h2></div>
+        <div class="muted small">Runs on the Pi and shows you the report right here. No laptop needed.</div>
+        <div class="row">
+          <button class="btn" style="flex:1" data-diag="doctor">${ic("pulse")} Health check</button>
+          <button class="btn" style="flex:1" data-diag="usb_debug">${ic("usb")} USB check</button>
+        </div>
+        <div class="row">
+          <button class="btn" style="flex:1" data-diag="logs">${ic("list")} Recent logs</button>
+          <button class="btn" style="flex:1" data-diag="sysinfo">${ic("cpu")} What's it doing</button>
+        </div>
+        ${toggleRow("heat_protect", "Protect the Pi from heat", "Clip uploads pause above 84°C and pick back up once it cools.", S().heat_protect)}
+        ${cam.hot_hold ? `<div class="banner warn">${ic("therm")}<div>Uploads are paused right now so the Pi can cool down.</div></div>` : ""}
+      </section>
+
+      <section class="card">
         <div class="card-head"><h2>Remote control</h2></div>
         <div class="muted small">These go to the Pi the next time it checks in (every ~30 s while the car is awake).</div>
         <div class="row">
@@ -871,6 +1285,9 @@
 
     v.querySelectorAll("[data-cmd]").forEach((b) => b.onclick = () => runCommand(b.dataset.cmd));
     v.querySelectorAll("[data-h]").forEach((b) => b.onclick = () => { state.stRange = Number(b.dataset.h); render(); });
+    v.querySelectorAll("[data-diag]").forEach((b) => b.onclick = () => runDiagnostic(b.dataset.diag));
+    v.querySelectorAll("[data-out]").forEach((b) => b.onclick = () => openCommandOutput(b.dataset.out));
+    bindSettings(v);
     bindSoftware(v);
     try {
       const h = await api(`/api/history?hours=${state.stRange >= 168 ? 168 : 24}`);
@@ -1028,6 +1445,19 @@
       </section>
 
       <section class="card">
+        <div class="card-head"><h2>Share the car WiFi</h2><span class="pill ${ov.wifi_set ? "ok" : ""}">${ov.wifi_set ? "Ready" : "Not set"}</span></div>
+        <div class="muted small">A code passengers scan with their camera to join the Starlink. No typing the password.</div>
+        <button class="btn block" id="wifiBtn">${ic("qr")} ${ov.wifi_set ? "Show the code" : "Set it up"}</button>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Siri Shortcuts</h2><span class="pill ${ov.shortcut_set ? "ok" : ""}">${ov.shortcut_set ? "Link made" : "Off"}</span></div>
+        <div class="muted small">Say “Hey Siri, car status” or “save my dashcam” without opening the app. Make a private link, then add it to the Shortcuts app.</div>
+        <button class="btn block" id="scBtn">${ic("mic")} ${ov.shortcut_set ? "Make a new link (old one stops working)" : "Make my private link"}</button>
+        <div id="scOut"></div>
+      </section>
+
+      <section class="card">
         <div class="card-head"><h2>About</h2>${(() => { const V = verInfo(); return `<span class="pill ${V.level}">${esc(V.behind ? "Pi update waiting" : V.level === "ok" ? "All up to date" : V.text)}</span>`; })()}</div>
         <dl class="kv">
           <dt>App</dt><dd>v${esc(APP_VERSION)}</dd>
@@ -1071,6 +1501,24 @@
       } catch (er) { if (er.message !== "auth") toast(er.message); }
     };
     bindSoftware(v);
+    document.getElementById("wifiBtn").onclick = () => wifiSheet();
+    document.getElementById("scBtn").onclick = async () => {
+      if (ov.shortcut_set && !(await confirmSheet({ title: "Make a new link?", body: "Any shortcut using the old link stops working until you paste in the new one.", yes: "Make a new one" }))) return;
+      try {
+        const r = await api("/api/settings/shortcut-key", { method: "POST", body: {} });
+        if (state.ov) state.ov.shortcut_set = true;
+        const links = [["Car status (Siri reads it out)", `${r.base}/status`], ["Save the last 10 minutes of dashcam", `${r.base}/save?minutes=10`], ["Run a speed test", `${r.base}/speedtest`]];
+        document.getElementById("scOut").innerHTML = `<div class="muted small">These links only show once. Copy the ones you want now.</div>
+          ${links.map(([t, u], i) => `<div class="t" style="font-weight:600">${t}</div><div class="code">${esc(u)}</div><button class="btn block" data-cp="${i}">${ic("copy")} Copy link</button>`).join("")}
+          <div class="steps">
+            <div class="step"><span class="n">1</span><span><div class="t">Open the Shortcuts app → tap +</div></span></div>
+            <div class="step"><span class="n">2</span><span><div class="t">Add the action “Get Contents of URL”</div><div class="d">Paste one of the links into it.</div></span></div>
+            <div class="step"><span class="n">3</span><span><div class="t">Add the action “Speak Text”</div><div class="d">It reads the Pi's answer out loud.</div></span></div>
+            <div class="step"><span class="n">4</span><span><div class="t">Name it what you want to say</div><div class="d">Like “Car status”. Then it's “Hey Siri, car status”.</div></span></div>
+          </div>`;
+        document.querySelectorAll("#scOut [data-cp]").forEach((b) => b.onclick = () => copyText(links[Number(b.dataset.cp)][1]));
+      } catch (e) { if (e.message !== "auth") toast(e.message); }
+    };
     document.getElementById("logout").onclick = async () => { await api("/api/logout", { method: "POST", body: {} }).catch(() => {}); state.authed = false; renderLogin(); };
     document.getElementById("logoutAll").onclick = async () => {
       if (!(await confirmSheet({ title: "Sign out everywhere?", body: "Every phone and browser will need the password again, including yours.", yes: "Sign out all", danger: true }))) return;
@@ -1098,14 +1546,22 @@
     const prefs = ps.prefs || {};
     const rowT = (k, t, d) => `<label class="toggle"><span><div style="font-weight:600">${t}</div><div class="muted small">${d}</div></span>
       <span class="switch"><input type="checkbox" data-pref="${k}" ${prefs[k] !== false ? "checked" : ""}><span></span></span></label>`;
-    body.innerHTML = `<div>${rowT("clip", "Clips uploaded", "Dashcam, Sentry and requested footage")}${rowT("problem", "Problems", "Dashcam issues, hot Pi, Starlink trouble")}${rowT("info", "Updates", "Pi connected, Starlink restarted, and similar")}</div>
+    const quiet = prefs.quiet || { on: false, from: 22, to: 7 };
+    const hourOpts = (sel) => Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === Number(sel) ? "selected" : ""}>${h === 0 ? "12 AM" : h < 12 ? h + " AM" : h === 12 ? "12 PM" : h - 12 + " PM"}</option>`).join("");
+    body.innerHTML = `<div>${rowT("clip", "Clips uploaded", "Dashcam, Sentry and requested footage")}${rowT("problem", "Problems", "Dashcam issues, hot Pi, Starlink trouble, data plan")}${rowT("info", "Updates", "Pi updated, Starlink restarted, and similar")}${rowT("recap", "Daily recap", "One summary at 8 PM on days the car was used")}${rowT("online", "Starlink is online", "A ping when the car wakes up and the internet is ready")}${rowT("wake", "Car woke up at night", "If the car wakes between midnight and 5 AM")}
+      <label class="toggle"><span><div style="font-weight:600">Quiet hours</div><div class="muted small">Hold everything except problems</div></span>
+        <span class="switch"><input type="checkbox" id="quietOn" ${quiet.on ? "checked" : ""}><span></span></span></label>
+      <div class="row" id="quietRow" ${quiet.on ? "" : "hidden"}><select class="input" id="quietFrom" style="flex:1" aria-label="Quiet from">${hourOpts(quiet.from)}</select><span class="muted">to</span><select class="input" id="quietTo" style="flex:1" aria-label="Quiet until">${hourOpts(quiet.to)}</select></div></div>
       <div class="row"><button class="btn" style="flex:1" id="pushTest">Send a test</button><button class="btn ghost" style="flex:1" id="pushOff">Turn off</button></div>
       <div class="muted small">${ps.devices} device${ps.devices === 1 ? "" : "s"} getting notifications.</div>`;
-    body.querySelectorAll("[data-pref]").forEach((inp) => inp.onchange = async () => {
+    const savePrefs = async () => {
       const p = {}; body.querySelectorAll("[data-pref]").forEach((x) => p[x.dataset.pref] = x.checked);
+      p.quiet = { on: document.getElementById("quietOn").checked, from: Number(document.getElementById("quietFrom").value), to: Number(document.getElementById("quietTo").value) };
+      document.getElementById("quietRow").hidden = !p.quiet.on;
       await api("/api/push/prefs", { method: "POST", body: { endpoint: ps.sub.endpoint, prefs: p } }).catch(() => {});
       toast("Saved");
-    });
+    };
+    body.querySelectorAll("[data-pref], #quietOn, #quietFrom, #quietTo").forEach((inp) => inp.onchange = savePrefs);
     document.getElementById("pushTest").onclick = async () => {
       const r = await api("/api/push/test", { method: "POST", body: {} }).catch(() => null);
       toast(r && r.results && r.results.some((x) => x.status && x.status < 300) ? "Sent! Check your notifications." : "Couldn't send. Try turning notifications off and on.");
@@ -1128,7 +1584,7 @@
       checkAppUpdate();
       const busy = document.querySelector(".scrim") || (document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName));
       if (!busy) {
-        if (manual || state.route === "home") render();
+        if (manual || state.route === "home" || state.route === "drive") render();
         else setTitle();
       }
       if (manual) toast("Up to date");

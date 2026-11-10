@@ -8,7 +8,7 @@ const enc = new TextEncoder();
 const now = () => Date.now() / 1000;
 const SESSION_DAYS = 180;
 // Version of this web app + server. Bump together with car/VERSION on every release.
-const APP_VERSION = "1.1";
+const APP_VERSION = "1.2";
 const REPO_RAW = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car";
 const COMMANDS = {
   upload_recent: "Upload recent dashcam",
@@ -20,7 +20,28 @@ const COMMANDS = {
   usb_rebind: "Re-offer the dashcam drive",
   usb_fix: "Switch USB0 to fallback mode",
   usb_fix_undo: "Undo the USB0 fallback",
+  speedtest: "Speed test",
+  doctor: "Health check",
+  usb_debug: "USB deep check",
+  logs: "Recent logs",
+  sysinfo: "What the Pi is busy with",
 };
+// What the app can tell the Pi to do differently. The Pi picks these up at every check-in.
+const PI_SETTINGS = {
+  uploads_paused: { type: "bool", def: false },
+  uploads_on_starlink: { type: "bool", def: true },
+  sentry_on_starlink: { type: "bool", def: true },
+  starlink_cap_mb: { type: "int", def: 5000, min: 0, max: 100000 },
+  starlink_speed: { type: "enum", def: "normal", values: ["slow", "normal", "fast", "max"] },
+  auto_speedtest: { type: "bool", def: true },
+  retention_days: { type: "enum", def: 0, values: [0, 30, 60, 90, 180, 365] },
+  heat_protect: { type: "bool", def: true },
+  plan_protect: { type: "bool", def: true },
+  plan_gb: { type: "int", def: 0, min: 0, max: 10000 },       // 0 = no monthly limit set
+  plan_reset_day: { type: "int", def: 1, min: 1, max: 28 },
+};
+const CMD_COLS = "id, type, args, status, created, picked, done, result, output IS NOT NULL AS has_output";
+const PUSH_DEFAULTS = { clip: true, problem: true, info: true, recap: true, wake: false, online: false };
 
 // ---------- helpers ----------
 function json(data, status = 200, headers = {}) {
@@ -81,6 +102,53 @@ async function readJson(req) {
 }
 const num = (v) => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? null : Number(v));
 const dayOf = (ts) => new Date(ts * 1000).toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+function denverClock(ts) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    .formatToParts(new Date(ts * 1000));
+  const g = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
+  return { h: g("hour") % 24, m: g("minute"), s: g("second") };
+}
+const denverMidnight = (ts) => { const c = denverClock(ts); return ts - (c.h * 3600 + c.m * 60 + c.s); };
+const clockText = (ts) => new Date(ts * 1000).toLocaleTimeString("en-US", { timeZone: "America/Denver", hour: "numeric", minute: "2-digit" });
+function durText(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h ? `${h}h ${m}m` : m ? `${m} min` : `${sec} sec`;
+}
+
+// ---------- Pi settings + data plan ----------
+async function piSettings(env) {
+  let saved = {};
+  try { saved = JSON.parse((await kvGet(env, "pi_settings")) || "{}"); } catch { saved = {}; }
+  const out = {};
+  for (const [k, spec] of Object.entries(PI_SETTINGS)) out[k] = saved[k] === undefined ? spec.def : saved[k];
+  out.rev = Number(saved.rev) || 0;
+  return out;
+}
+function cleanSetting(key, value) {
+  const spec = PI_SETTINGS[key];
+  if (!spec) return undefined;
+  if (spec.type === "bool") return !!value;
+  if (spec.type === "int") { const n = Math.round(Number(value)); return isNaN(n) ? undefined : Math.max(spec.min, Math.min(spec.max, n)); }
+  if (spec.type === "enum") { const v = typeof spec.def === "number" ? Number(value) : String(value); return spec.values.includes(v) ? v : undefined; }
+  return undefined;
+}
+// This month's Starlink data against the plan limit (if one is set in the app).
+async function planUsage(env, st) {
+  if (!st.plan_gb) return null;
+  const t = now();
+  let start = denverMidnight(t), startDay = dayOf(t);
+  for (let i = 0; i < 32; i++) {
+    const d = dayOf(start + 3600);
+    if (Number(d.slice(8, 10)) === st.plan_reset_day) { startDay = d; break; }
+    start -= 86400;
+  }
+  const r = await env.DB.prepare("SELECT COALESCE(SUM(COALESCE(down_mb,0)+COALESCE(up_mb,0)),0) AS mb FROM usage_daily WHERE day >= ?").bind(startDay).first();
+  const used = (r.mb || 0) / 1000;
+  const daysIn = Math.max(1, Math.round((t - start) / 86400) + 1);
+  return { gb: st.plan_gb, reset_day: st.plan_reset_day, cycle_start: startDay, used_gb: Math.round(used * 10) / 10,
+    pct: Math.round((100 * used) / st.plan_gb), days_in: daysIn, per_day_gb: Math.round((used / daysIn) * 10) / 10 };
+}
 
 // ---------- versions ----------
 // Compare "1.10" vs "1.9" the way people expect. Returns -1, 0, 1 (null if either is missing).
@@ -163,8 +231,17 @@ async function deviceFrom(req, env) {
 async function notifyAll(env, payload, category, ctx) {
   const subs = (await env.DB.prepare("SELECT * FROM push_subs").all()).results || [];
   const work = subs.map(async (s) => {
-    const prefs = JSON.parse(s.prefs || "{}");
-    if (category && prefs[category] === false) return null;
+    let prefs = {};
+    try { prefs = JSON.parse(s.prefs || "{}"); } catch { prefs = {}; }
+    if (category) {
+      const on = prefs[category] === undefined ? PUSH_DEFAULTS[category] !== false : !!prefs[category];
+      if (!on) return null;
+      // Quiet hours hold everything except problems.
+      if (category !== "problem" && prefs.quiet && prefs.quiet.on) {
+        const h = denverClock(now()).h, a = Number(prefs.quiet.from ?? 22), b = Number(prefs.quiet.to ?? 7);
+        if (a === b || (a < b ? h >= a && h < b : h >= a || h < b)) return null;
+      }
+    }
     try {
       const status = await sendPush(env, s, payload);
       if (status === 404 || status === 410) {
@@ -181,10 +258,16 @@ async function notifyAll(env, payload, category, ctx) {
   if (ctx) ctx.waitUntil(all);
   return all;
 }
-async function addAlert(env, ctx, { title, message, category = "info", link = null }) {
+async function addAlert(env, ctx, { title, message, category = "info", link = null, at = null, push = true }) {
+  const t = now();
+  const when = at && at <= t + 60 && at > t - 4 * 86400 ? at : t;
   await env.DB.prepare("INSERT INTO alerts(at,title,message,category,link) VALUES(?,?,?,?,?)")
-    .bind(now(), String(title).slice(0, 120), String(message || "").slice(0, 400), category, link).run();
-  notifyAll(env, { title, body: message, url: link || "/#home", tag: category }, category, ctx);
+    .bind(when, String(title).slice(0, 120), String(message || "").slice(0, 400), category, link).run();
+  // Something that happened a while ago (the Pi was offline) goes in the list but doesn't buzz the phone late.
+  if (push && t - when < 1800) {
+    const p = notifyAll(env, { title, body: message, url: link || "/#home", tag: category }, category, ctx);
+    if (!ctx) await p;
+  }
 }
 
 // ---------- app API ----------
@@ -192,16 +275,36 @@ async function overview(env, ctx) {
   const latest = await kvGet(env, "latest");
   const latestAt = Number(await kvGet(env, "latest_at")) || null;
   const clips = (await env.DB.prepare(
-    "SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, thumb IS NOT NULL AS has_thumb FROM clips ORDER BY uploaded_at DESC LIMIT 8").all()).results;
+    "SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, thumb IS NOT NULL AS has_thumb FROM clips ORDER BY uploaded_at DESC LIMIT 8").all()).results;
   const alerts = (await env.DB.prepare("SELECT * FROM alerts ORDER BY at DESC LIMIT 15").all()).results;
-  const commands = (await env.DB.prepare("SELECT * FROM commands ORDER BY created DESC LIMIT 8").all()).results;
+  const commands = (await env.DB.prepare(`SELECT ${CMD_COLS} FROM commands ORDER BY created DESC LIMIT 10`).all()).results;
   const counts = await env.DB.prepare(
     "SELECT SUM(kind='dashcam') AS dashcam, SUM(kind='sentry') AS sentry, SUM(kind='requested') AS requested, COALESCE(SUM(size_mb),0) AS total_mb FROM clips").first();
   const today = await env.DB.prepare("SELECT * FROM usage_daily WHERE day=?").bind(dayOf(now())).first();
   const lastLoc = await env.DB.prepare("SELECT ts, lat, lon FROM history WHERE lat IS NOT NULL ORDER BY ts DESC LIMIT 1").first();
   const status = latest ? JSON.parse(latest) : null;
   const latestV = await latestVersion(env, ctx);
+  const t = now(), mid = denverMidnight(t);
+  const st = await piSettings(env);
+  const drops = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(end - start),0) AS s FROM outages WHERE start >= ?").bind(mid).first();
+  const clipsToday = await env.DB.prepare("SELECT COUNT(*) AS n FROM clips WHERE uploaded_at >= ?").bind(mid).first();
+  const speed = await env.DB.prepare("SELECT * FROM speedtests ORDER BY at DESC LIMIT 1").first();
+  const week = await env.DB.prepare(`SELECT COALESCE(SUM(awake_s),0) AS awake_s, COALESCE(SUM(starlink_s),0) AS starlink_s, COALESCE(SUM(good_s),0) AS good_s,
+    COALESCE(SUM(COALESCE(down_mb,0)+COALESCE(up_mb,0)),0) AS data_mb, COALESCE(SUM(energy_wh),0) AS energy_wh FROM usage_daily WHERE day >= ?`).bind(dayOf(t - 6 * 86400)).first();
+  const weekDrops = await env.DB.prepare("SELECT COUNT(*) AS n FROM outages WHERE start >= ?").bind(t - 7 * 86400).first();
+  let sess = null;
+  try { sess = JSON.parse((await kvGet(env, "sess")) || "null"); } catch { sess = null; }
   return {
+    settings: st,
+    settings_applied: status ? status.settings_rev === st.rev : null,
+    plan: await planUsage(env, st),
+    drops_today: { count: drops.n, seconds: Math.round(drops.s) },
+    clips_today: clipsToday.n,
+    speedtest_last: speed || null,
+    week: { ...week, drops: weekDrops.n },
+    session: sess && latestAt && t - sess.last < 600 ? { start: sess.start, last: sess.last } : null,
+    wifi_set: !!(await kvGet(env, "wifi")),
+    shortcut_set: !!(await kvGet(env, "shortcut_key_hash")),
     server_time: now(),
     app_version: APP_VERSION,
     versions: versionInfo(status, latestAt, latestV),
@@ -271,8 +374,8 @@ async function handleApp(req, env, ctx, url, path) {
     const before = Number(url.searchParams.get("before")) || 1e15;
     const limit = Math.min(Number(url.searchParams.get("limit")) || 30, 100);
     const q = kind === "all"
-      ? env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, thumb IS NOT NULL AS has_thumb FROM clips WHERE id < ? ORDER BY id DESC LIMIT ?").bind(before, limit)
-      : env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, thumb IS NOT NULL AS has_thumb FROM clips WHERE kind=? AND id < ? ORDER BY id DESC LIMIT ?").bind(kind, before, limit);
+      ? env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, thumb IS NOT NULL AS has_thumb FROM clips WHERE id < ? ORDER BY id DESC LIMIT ?").bind(before, limit)
+      : env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, thumb IS NOT NULL AS has_thumb FROM clips WHERE kind=? AND id < ? ORDER BY id DESC LIMIT ?").bind(kind, before, limit);
     return json({ clips: (await q.all()).results });
   }
   const thumb = path.match(/^\/api\/clips\/(\d+)\/thumb$/);
@@ -282,7 +385,70 @@ async function handleApp(req, env, ctx, url, path) {
     return new Response(new Uint8Array(r.thumb), { headers: { "Content-Type": r.thumb_type || "image/png", "Cache-Control": "private, max-age=86400" } });
   }
   if (path === "/api/commands" && m === "GET") {
-    return json({ commands: (await env.DB.prepare("SELECT * FROM commands ORDER BY created DESC LIMIT 20").all()).results, labels: COMMANDS });
+    return json({ commands: (await env.DB.prepare(`SELECT ${CMD_COLS} FROM commands ORDER BY created DESC LIMIT 20`).all()).results, labels: COMMANDS });
+  }
+  const oneCmd = path.match(/^\/api\/commands\/(\d+)$/);
+  if (oneCmd && m === "GET") {
+    const r = await env.DB.prepare("SELECT * FROM commands WHERE id=?").bind(Number(oneCmd[1])).first();
+    return r ? json({ command: r, label: COMMANDS[r.type] || r.type }) : err(404, "Not found");
+  }
+  if (path === "/api/settings/pi" && m === "GET") return json({ settings: await piSettings(env) });
+  if (path === "/api/settings/pi" && m === "POST") {
+    const b = await readJson(req);
+    const cur = await piSettings(env);
+    let changed = false;
+    for (const [k, v] of Object.entries(b || {})) {
+      const c = cleanSetting(k, v);
+      if (c !== undefined && cur[k] !== c) { cur[k] = c; changed = true; }
+    }
+    if (changed) { cur.rev = (cur.rev || 0) + 1; await kvSet(env, "pi_settings", JSON.stringify(cur)); }
+    return json({ ok: true, settings: cur, plan: await planUsage(env, cur) });
+  }
+  if (path === "/api/settings/wifi" && m === "GET") {
+    let w = null;
+    try { w = JSON.parse((await kvGet(env, "wifi")) || "null"); } catch { w = null; }
+    return json({ wifi: w });
+  }
+  if (path === "/api/settings/wifi" && m === "POST") {
+    const b = await readJson(req);
+    const ssid = String(b.ssid || "").slice(0, 64), password = String(b.password || "").slice(0, 64);
+    if (!ssid) { await env.DB.prepare("DELETE FROM kv WHERE k='wifi'").run(); return json({ ok: true, wifi: null }); }
+    await kvSet(env, "wifi", JSON.stringify({ ssid, password }));
+    return json({ ok: true, wifi: { ssid, password } });
+  }
+  if (path === "/api/settings/shortcut-key" && m === "POST") {
+    const b = await readJson(req);
+    if (b.remove) { await env.DB.prepare("DELETE FROM kv WHERE k='shortcut_key_hash'").run(); return json({ ok: true, key: null }); }
+    const key = randomToken(18);
+    await kvSet(env, "shortcut_key_hash", await sha256hex(key));
+    return json({ ok: true, key, base: `${url.protocol}//${url.host}/api/x/${key}` });
+  }
+  if (path === "/api/skymap" && m === "GET") {
+    let sky = null;
+    try { sky = JSON.parse((await kvGet(env, "skymap")) || "null"); } catch { sky = null; }
+    return json({ sky });
+  }
+  if (path === "/api/speedtests" && m === "GET") {
+    const days = Math.min(Number(url.searchParams.get("days")) || 30, 365);
+    const rows = (await env.DB.prepare("SELECT * FROM speedtests WHERE at > ? ORDER BY at DESC LIMIT 200").bind(now() - days * 86400).all()).results;
+    return json({ rows });
+  }
+  if (path === "/api/outages" && m === "GET") {
+    const days = Math.min(Number(url.searchParams.get("days")) || 7, 90);
+    const rows = (await env.DB.prepare("SELECT start, end, cause FROM outages WHERE start > ? ORDER BY start DESC LIMIT 300").bind(now() - days * 86400).all()).results;
+    const perDay = (await env.DB.prepare("SELECT day, awake_s, starlink_s, good_s, energy_wh FROM usage_daily WHERE day >= ? ORDER BY day").bind(dayOf(now() - (days - 1) * 86400)).all()).results;
+    return json({ days, rows, per_day: perDay });
+  }
+  if (path === "/api/timeline" && m === "GET") {
+    const days = Math.min(Number(url.searchParams.get("days")) || 7, 60);
+    const since = now() - days * 86400;
+    const [alerts, outs, drives, tests] = await Promise.all([
+      env.DB.prepare("SELECT at, title, message, category, link FROM alerts WHERE at > ? ORDER BY at DESC LIMIT 300").bind(since).all(),
+      env.DB.prepare("SELECT start, end, cause FROM outages WHERE start > ? ORDER BY start DESC LIMIT 200").bind(since).all(),
+      env.DB.prepare("SELECT start, end, checkins, net FROM drives WHERE start > ? ORDER BY start DESC LIMIT 200").bind(since).all(),
+      env.DB.prepare("SELECT at, down, up, ping, auto FROM speedtests WHERE at > ? ORDER BY at DESC LIMIT 100").bind(since).all(),
+    ]);
+    return json({ days, alerts: alerts.results, outages: outs.results, sessions: drives.results, speedtests: tests.results });
   }
   if (path === "/api/commands" && m === "POST") {
     const b = await readJson(req);
@@ -303,7 +469,7 @@ async function handleApp(req, env, ctx, url, path) {
     const b = await readJson(req);
     if (!b.endpoint || !b.keys?.p256dh || !b.keys?.auth) return err(400, "Bad subscription");
     await env.DB.prepare("INSERT INTO push_subs(endpoint,p256dh,auth,label,created,prefs) VALUES(?,?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth, label=excluded.label")
-      .bind(b.endpoint, b.keys.p256dh, b.keys.auth, String(b.label || "Phone").slice(0, 40), now(), JSON.stringify({ clip: true, problem: true, info: true })).run();
+      .bind(b.endpoint, b.keys.p256dh, b.keys.auth, String(b.label || "Phone").slice(0, 40), now(), JSON.stringify(PUSH_DEFAULTS)).run();
     return json({ ok: true });
   }
   if (path === "/api/push/unsubscribe" && m === "POST") {
@@ -313,7 +479,10 @@ async function handleApp(req, env, ctx, url, path) {
   }
   if (path === "/api/push/prefs" && m === "POST") {
     const b = await readJson(req);
-    const prefs = { clip: b.prefs?.clip !== false, problem: b.prefs?.problem !== false, info: b.prefs?.info !== false };
+    const prefs = {};
+    for (const k of Object.keys(PUSH_DEFAULTS)) prefs[k] = b.prefs?.[k] === undefined ? PUSH_DEFAULTS[k] : !!b.prefs[k];
+    const q = b.prefs?.quiet;
+    prefs.quiet = { on: !!(q && q.on), from: Math.max(0, Math.min(23, Number(q?.from ?? 22))), to: Math.max(0, Math.min(23, Number(q?.to ?? 7))) };
     await env.DB.prepare("UPDATE push_subs SET prefs=? WHERE endpoint=?").bind(JSON.stringify(prefs), String(b.endpoint || "")).run();
     return json({ ok: true, prefs });
   }
@@ -321,7 +490,7 @@ async function handleApp(req, env, ctx, url, path) {
     const b = await readJson(req);
     const r = await env.DB.prepare("SELECT label, prefs, last_ok FROM push_subs WHERE endpoint=?").bind(String(b.endpoint || "")).first();
     const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM push_subs").first();
-    return json({ subscribed: !!r, prefs: r ? JSON.parse(r.prefs || "{}") : null, devices: n.n });
+    return json({ subscribed: !!r, prefs: r ? { ...PUSH_DEFAULTS, ...JSON.parse(r.prefs || "{}") } : null, devices: n.n });
   }
   if (path === "/api/push/test" && m === "POST") {
     const results = await notifyAll(env, { title: "Car Atlas", body: "Notifications are working. 🚗📡", url: "/#home", tag: "test" }, null, null);
@@ -355,6 +524,7 @@ async function handlePi(req, env, ctx, path) {
   if (path === "/api/pi/status" && m === "POST") {
     const s = await readJson(req);
     const t = now();
+    const prevAt = Number(await kvGet(env, "latest_at")) || 0;
     await kvSet(env, "latest", JSON.stringify(s));
     await kvSet(env, "latest_at", String(t));
     const last = await env.DB.prepare("SELECT MAX(ts) AS ts FROM history").first();
@@ -368,15 +538,101 @@ async function handlePi(req, env, ctx, path) {
         num(pi.cpu_temp_c), num(pi.load1), num(pi.wifi_signal), cam.gadget || null, cam.usb_link || null,
         num(loc.lat), num(loc.lon)).run();
     }
-    const u = s.starlink?.usage_today_mb;
-    if (u) {
-      await env.DB.prepare(`INSERT INTO usage_daily(day, down_mb, up_mb, clips_mb) VALUES(?,?,?,?) ON CONFLICT(day) DO UPDATE SET
-        down_mb=MAX(down_mb, excluded.down_mb), up_mb=MAX(up_mb, excluded.up_mb), clips_mb=MAX(COALESCE(clips_mb,0), excluded.clips_mb)`)
-        .bind(dayOf(t), num(u.down) || 0, num(u.up) || 0, num(s.teslacam?.starlink_uploaded_today_mb) || 0).run();
+    // Time awake / on Starlink / with a good signal, added up per day.
+    const dt = prevAt && t - prevAt < 120 ? Math.min(t - prevAt, 60) : 0;
+    const onSl = s.pi?.network === "starlink";
+    const u = s.starlink?.usage_today_mb || {};
+    await env.DB.prepare(`INSERT INTO usage_daily(day, down_mb, up_mb, clips_mb, energy_wh, awake_s, starlink_s, good_s) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(day) DO UPDATE SET down_mb=MAX(COALESCE(down_mb,0), excluded.down_mb), up_mb=MAX(COALESCE(up_mb,0), excluded.up_mb),
+      clips_mb=MAX(COALESCE(clips_mb,0), excluded.clips_mb), energy_wh=MAX(COALESCE(energy_wh,0), excluded.energy_wh),
+      awake_s=COALESCE(awake_s,0)+excluded.awake_s, starlink_s=COALESCE(starlink_s,0)+excluded.starlink_s, good_s=COALESCE(good_s,0)+excluded.good_s`)
+      .bind(dayOf(t), num(u.down) || 0, num(u.up) || 0, num(s.teslacam?.starlink_uploaded_today_mb) || 0, num(s.starlink?.energy_today_wh) || 0,
+        dt, onSl ? dt : 0, onSl && s.starlink?.quality === "good" ? dt : 0).run();
+
+    // "Car awake" sessions: a gap of 10+ minutes between check-ins starts a new one.
+    let sess = null;
+    try { sess = JSON.parse((await kvGet(env, "sess")) || "null"); } catch { sess = null; }
+    if (!sess || t - sess.last > 600) {
+      if (sess && sess.last - sess.start >= 60) {
+        await env.DB.prepare("INSERT OR REPLACE INTO drives(start, end, checkins, net) VALUES(?,?,?,?)").bind(sess.start, sess.last, sess.n || 0, sess.net || null).run();
+      }
+      const gap = sess ? t - sess.last : null;
+      sess = { start: t, last: t, n: 1, net: s.pi?.network || null, announced: false };
+      const hr = denverClock(t).h;
+      if (gap !== null && gap > 1800 && hr >= 0 && hr < 5) {
+        await addAlert(env, ctx, { title: `Car woke up at ${clockText(t)}`, category: "wake", link: "/#activity",
+          message: "The Pi just turned on, so the car is awake. Usually that's Sentry, charging or the Tesla app. Worth a look if you weren't expecting it." });
+      }
+    } else {
+      sess.last = t; sess.n = (sess.n || 0) + 1;
+      if (onSl) sess.net = "starlink";
+    }
+    if (!sess.announced && onSl && s.starlink?.state === "CONNECTED" && s.pi?.internet) {
+      sess.announced = true;
+      if (t - sess.start < 900) {
+        const p = notifyAll(env, { title: "Starlink is online in the car", body: `Connected · ${Math.round(s.starlink.ping_ms || 0)} ms`, url: "/#starlink", tag: "online" }, "online", ctx);
+        if (!ctx) await p;
+      }
+    }
+    await kvSet(env, "sess", JSON.stringify(sess));
+
+    const st = await piSettings(env);
+    const plan = await planUsage(env, st);
+    if (plan) {
+      const mark = plan.pct >= 100 ? 100 : plan.pct >= 80 ? 80 : 0;
+      const tag = `${plan.cycle_start}:${mark}`;
+      if (mark && (await kvGet(env, "plan_alerted")) !== tag) {
+        await kvSet(env, "plan_alerted", tag);
+        await addAlert(env, ctx, { title: mark === 100 ? "Starlink data plan used up" : "Starlink data plan at 80%", category: "problem", link: "/#starlink",
+          message: `${plan.used_gb} of ${plan.gb} GB used since ${plan.cycle_start}.${st.plan_protect ? " Footage uploads over Starlink pause at 90% and wait for home WiFi." : ""}` });
+      }
     }
     const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM commands WHERE status='queued'").first();
     const lv = await latestVersion(env, ctx);
-    return json({ ok: true, commands_waiting: pending.n, latest_version: lv.version });
+    const send = { ...st, plan_pct: plan ? plan.pct : null };
+    delete send.plan_gb; delete send.plan_reset_day;
+    return json({ ok: true, commands_waiting: pending.n, latest_version: lv.version, settings: send });
+  }
+  if (path === "/api/pi/history" && m === "POST") {
+    // Readings the Pi kept while it couldn't reach us (one a minute).
+    const b = await readJson(req);
+    const rows = (b.rows || []).slice(0, 300).filter((r) => num(r.ts) !== null && r.ts > now() - 4 * 86400 && r.ts < now() + 60);
+    const stmts = rows.map((r) => env.DB.prepare(`INSERT OR IGNORE INTO history(ts, net, internet, dish_ok, state, quality, ping, drop_pct, obstructed, down, up, power, temp, load1, wifi_signal, gadget, usb_link, lat, lon)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(num(r.ts), r.net || null, r.internet ? 1 : 0, r.dish_ok ? 1 : 0, r.state || null, r.quality || null,
+      num(r.ping), num(r.drop_pct), num(r.obstructed), num(r.down), num(r.up), num(r.power), num(r.temp), num(r.load1), num(r.wifi_signal),
+      r.gadget || null, r.usb_link || null, num(r.lat), num(r.lon)));
+    const perDay = {};
+    for (const r of rows) {
+      const d = (perDay[dayOf(r.ts)] ||= { a: 0, s: 0, g: 0 });
+      d.a += 60; if (r.net === "starlink") { d.s += 60; if (r.quality === "good") d.g += 60; }
+    }
+    for (const [day, d] of Object.entries(perDay)) {
+      stmts.push(env.DB.prepare(`INSERT INTO usage_daily(day, awake_s, starlink_s, good_s) VALUES(?,?,?,?) ON CONFLICT(day) DO UPDATE SET
+        awake_s=COALESCE(awake_s,0)+excluded.awake_s, starlink_s=COALESCE(starlink_s,0)+excluded.starlink_s, good_s=COALESCE(good_s,0)+excluded.good_s`).bind(day, d.a, d.s, d.g));
+    }
+    for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+    return json({ ok: true, saved: rows.length });
+  }
+  if (path === "/api/pi/outages" && m === "POST") {
+    const b = await readJson(req);
+    const stmts = (b.outages || []).slice(0, 300).filter((o) => num(o[0]) !== null && num(o[1]) !== null && o[1] >= o[0]).map((o) =>
+      env.DB.prepare("INSERT OR REPLACE INTO outages(start, end, cause) VALUES(?,?,?)").bind(num(o[0]), num(o[1]), String(o[2] || "no service").slice(0, 60)));
+    for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+    return json({ ok: true, saved: stmts.length });
+  }
+  if (path === "/api/pi/speedtest" && m === "POST") {
+    const r = await readJson(req);
+    if (num(r.down_mbps) === null) return err(400, "No result");
+    const at = num(r.at) && r.at < now() + 60 && r.at > now() - 86400 ? r.at : now();
+    await env.DB.prepare("INSERT OR REPLACE INTO speedtests(at, down, up, ping, jitter, network, profile, auto, used_mb, server) VALUES(?,?,?,?,?,?,?,?,?,?)")
+      .bind(at, num(r.down_mbps), num(r.up_mbps), num(r.ping_ms), num(r.jitter_ms), r.network || null, r.profile || null, r.auto ? 1 : 0, num(r.used_mb), r.server ? String(r.server).slice(0, 8) : null).run();
+    return json({ ok: true });
+  }
+  if (path === "/api/pi/skymap" && m === "POST") {
+    const b = await readJson(req);
+    if (!b.data || String(b.data).length > 60000 || !num(b.w) || !num(b.h)) return err(400, "Bad sky map");
+    await kvSet(env, "skymap", JSON.stringify({ w: b.w, h: b.h, known: num(b.known), at: now(), data: String(b.data) }));
+    return json({ ok: true });
   }
   if (path === "/api/pi/coverage" && m === "POST") {
     const b = await readJson(req);
@@ -395,11 +651,17 @@ async function handlePi(req, env, ctx, path) {
       try { thumb = Uint8Array.from(atob(c.thumb_b64), (ch) => ch.charCodeAt(0)); } catch { thumb = null; }
     }
     const driveUrl = c.drive_id ? `https://drive.google.com/drive/folders/${c.drive_id}` : (c.drive_url || null);
-    await env.DB.prepare(`INSERT INTO clips(kind, folder, drive_id, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, thumb, thumb_type)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(kind, folder) DO UPDATE SET drive_id=excluded.drive_id, drive_url=excluded.drive_url,
-      size_mb=excluded.size_mb, uploaded_at=excluded.uploaded_at, thumb=COALESCE(excluded.thumb, clips.thumb)`).bind(
+    let files = null;
+    if (Array.isArray(c.files)) {
+      const f = JSON.stringify(c.files.slice(0, 80).map((x) => [String(x[0]).slice(0, 19), String(x[1]).slice(0, 20), String(x[2]).slice(0, 60)]));
+      if (f.length < 12000) files = f;
+    }
+    await env.DB.prepare(`INSERT INTO clips(kind, folder, drive_id, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, thumb, thumb_type, files, camera)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(kind, folder) DO UPDATE SET drive_id=excluded.drive_id, drive_url=excluded.drive_url,
+      size_mb=excluded.size_mb, uploaded_at=excluded.uploaded_at, thumb=COALESCE(excluded.thumb, clips.thumb), files=COALESCE(excluded.files, clips.files)`).bind(
       kind, String(c.folder).slice(0, 80), c.drive_id || null, driveUrl, num(c.size_mb), c.reason || null, c.city || null,
-      num(c.lat), num(c.lon), c.event_ts || null, now(), c.network || null, thumb, c.thumb_type || "image/png").run();
+      num(c.lat), num(c.lon), c.event_ts || null, now(), c.network || null, thumb, c.thumb_type || "image/png", files,
+      c.camera === undefined || c.camera === null ? null : String(c.camera).slice(0, 4)).run();
     const label = kind === "sentry" ? "Sentry event saved" : kind === "requested" ? "Your dashcam request is ready" : "Dashcam clip saved";
     const where = c.city ? ` in ${c.city}` : "";
     await addAlert(env, ctx, { title: label, message: `${c.folder}${where} is in Google Drive.`, category: "clip", link: "/#footage" });
@@ -407,7 +669,7 @@ async function handlePi(req, env, ctx, path) {
   }
   if (path === "/api/pi/alert" && m === "POST") {
     const a = await readJson(req);
-    await addAlert(env, ctx, { title: a.title || "Car Atlas", message: a.message || "", category: ["clip", "problem", "info"].includes(a.category) ? a.category : "info", link: a.link || "/#home" });
+    await addAlert(env, ctx, { title: a.title || "Car Atlas", message: a.message || "", category: ["clip", "problem", "info"].includes(a.category) ? a.category : "info", link: a.link || "/#home", at: num(a.at) });
     return json({ ok: true });
   }
   if (path === "/api/pi/commands" && m === "GET") {
@@ -418,11 +680,79 @@ async function handlePi(req, env, ctx, path) {
   const done = path.match(/^\/api\/pi\/commands\/(\d+)$/);
   if (done && m === "POST") {
     const b = await readJson(req);
-    await env.DB.prepare("UPDATE commands SET status=?, done=?, result=? WHERE id=?")
-      .bind(b.ok ? "done" : "failed", now(), String(b.result || "").slice(0, 500), Number(done[1])).run();
+    const output = b.output ? String(b.output).slice(-16000) : null;
+    await env.DB.prepare("UPDATE commands SET status=?, done=?, result=?, output=COALESCE(?, output) WHERE id=?")
+      .bind(b.ok ? "done" : "failed", now(), String(b.result || "").slice(0, 500), output, Number(done[1])).run();
     return json({ ok: true });
   }
   return err(404, "Not found");
+}
+
+// ---------- Siri Shortcuts (a private link with its own key, no login) ----------
+const text = (body, status = 200) => new Response(body, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+async function queueCommand(env, type, args = {}) {
+  const open = await env.DB.prepare("SELECT id FROM commands WHERE type=? AND status IN ('queued','picked')").bind(type).first();
+  if (open) return false;
+  await env.DB.prepare("INSERT INTO commands(type,args,status,created) VALUES(?,?,'queued',?)").bind(type, JSON.stringify(args), now()).run();
+  return true;
+}
+async function spokenStatus(env) {
+  const latest = await kvGet(env, "latest");
+  const at = Number(await kvGet(env, "latest_at")) || 0;
+  if (!latest) return "Car Atlas hasn't heard from the Pi yet.";
+  const s = JSON.parse(latest), t = now();
+  const clips = await env.DB.prepare("SELECT COUNT(*) AS n FROM clips WHERE uploaded_at >= ?").bind(denverMidnight(t)).first();
+  const clipTxt = clips.n ? ` ${clips.n} clip${clips.n === 1 ? "" : "s"} saved today.` : "";
+  if (t - at > 150) return `The car is asleep. The Pi last checked in ${durText(t - at)} ago.${clipTxt}`;
+  const d = s.starlink || {}, cam = s.teslacam || {}, pi = s.pi || {};
+  const sl = pi.network === "starlink"
+    ? (d.state === "CONNECTED" ? `Starlink is connected at ${Math.round(d.ping_ms || 0)} milliseconds${d.quality === "weak" ? ", but the signal is weak" : ""}.` : "Starlink is looking for satellites.")
+    : `The Pi is on ${pi.network === "home" ? "home WiFi" : pi.wifi_ssid || "no WiFi"}.`;
+  const dash = cam.usb_link === "configured" ? "The dashcam is recording to the Pi." : "The car is not connected to the dashcam drive.";
+  return `The car is awake. ${sl} ${dash} ${pi.cpu_temp_c ? `The Pi is at ${Math.round(pi.cpu_temp_c)} degrees.` : ""}${clipTxt}`;
+}
+async function handleShortcut(req, env, ctx, url, path) {
+  const m = path.match(/^\/api\/x\/([A-Za-z0-9_-]{10,60})\/([a-z-]+)$/);
+  const stored = await kvGet(env, "shortcut_key_hash");
+  if (!m || !stored || !safeEqual(await sha256hex(m[1]), stored)) return text("That link isn't valid anymore. Make a new one in Car Atlas, Settings, Siri Shortcuts.", 403);
+  const action = m[2];
+  if (action === "status") return text(await spokenStatus(env));
+  if (action === "save") {
+    const minutes = Math.max(1, Math.min(60, Number(url.searchParams.get("minutes")) || 10));
+    const ok = await queueCommand(env, "upload_recent", { minutes });
+    return text(ok ? `Okay. Saving the last ${minutes} minutes of dashcam to Google Drive.` : "A dashcam save is already on its way.");
+  }
+  if (action === "speedtest") {
+    const ok = await queueCommand(env, "speedtest");
+    return text(ok ? "Okay. Running a speed test on the Starlink. The result shows up in Car Atlas in about half a minute." : "A speed test is already running.");
+  }
+  return text("Car Atlas doesn't know that one. Try status, save, or speedtest.", 404);
+}
+
+// ---------- once-an-hour jobs ----------
+async function dailyRecap(env, ctx) {
+  const t = now(), day = dayOf(t);
+  if (denverClock(t).h !== 20 || (await kvGet(env, "recap_day")) === day) return;
+  await kvSet(env, "recap_day", day);
+  const u = await env.DB.prepare("SELECT * FROM usage_daily WHERE day=?").bind(day).first();
+  if (!u || (u.awake_s || 0) < 300) return;      // car barely on today: nothing worth a ping
+  const mid = denverMidnight(t);
+  const clips = await env.DB.prepare("SELECT COUNT(*) AS n FROM clips WHERE uploaded_at >= ?").bind(mid).first();
+  const drops = await env.DB.prepare("SELECT COUNT(*) AS n FROM outages WHERE start >= ?").bind(mid).first();
+  const parts = [`Awake ${durText(u.awake_s)}`];
+  if ((u.starlink_s || 0) > 120) parts.push(`Starlink good ${Math.round((100 * (u.good_s || 0)) / u.starlink_s)}% of the time`);
+  const gb = ((u.down_mb || 0) + (u.up_mb || 0)) / 1000;
+  if (gb >= 0.05) parts.push(`${gb.toFixed(1)} GB used`);
+  if (drops.n) parts.push(`${drops.n} drop${drops.n === 1 ? "" : "s"}`);
+  parts.push(`${clips.n} clip${clips.n === 1 ? "" : "s"} saved`);
+  await addAlert(env, ctx, { title: "Today in the Model Y", message: parts.join(" · ") + ".", category: "recap", link: "/#activity" });
+}
+async function silentCheck(env, ctx) {
+  const at = Number(await kvGet(env, "latest_at")) || 0;
+  if (!at || now() - at < 4 * 86400 || (await kvGet(env, "silent_alerted")) === String(at)) return;
+  await kvSet(env, "silent_alerted", String(at));
+  await addAlert(env, ctx, { title: "Haven't heard from the Pi in 4 days", category: "problem",
+    message: "If the car has been driven since then, the Pi may be unplugged or stuck. Check the cable in the glovebox." });
 }
 
 // ---------- entry ----------
@@ -465,6 +795,7 @@ export default {
         await addAlert(env, ctx, { title: "Pi connected", message: `${b.hostname || "The Pi"} is now linked to Car Atlas.`, category: "info" });
         return json({ ok: true, key, url: `${url.protocol}//${url.host}` });
       }
+      if (path.startsWith("/api/x/")) return await handleShortcut(req, env, ctx, url, path);
       if (path.startsWith("/api/pi/")) {
         if (!(await deviceFrom(req, env))) return err(401, "Device not paired");
         return await handlePi(req, env, ctx, path);
@@ -478,16 +809,27 @@ export default {
     }
   },
 
-  async scheduled(event, env) {
+  async scheduled(event, env, ctx) {
     const t = now();
-    await env.DB.batch([
+    try { await dailyRecap(env, ctx); } catch (e) { console.log("recap failed", String(e)); }
+    try { await silentCheck(env, ctx); } catch (e) { console.log("silent check failed", String(e)); }
+    if (new Date(t * 1000).getUTCHours() % 6 !== 0) return;
+    const st = await piSettings(env);
+    const jobs = [
       env.DB.prepare("DELETE FROM history WHERE ts < ?").bind(t - 120 * 86400),
       env.DB.prepare("DELETE FROM login_attempts WHERE ts < ?").bind(t - 86400),
       env.DB.prepare("DELETE FROM sessions WHERE expires < ?").bind(t),
       env.DB.prepare("DELETE FROM pairing WHERE expires < ?").bind(t - 86400),
       env.DB.prepare("DELETE FROM commands WHERE created < ?").bind(t - 30 * 86400),
+      env.DB.prepare("UPDATE commands SET output=NULL WHERE created < ? AND output IS NOT NULL").bind(t - 7 * 86400),
       env.DB.prepare("DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY at DESC LIMIT 500)"),
       env.DB.prepare("UPDATE commands SET status='expired' WHERE status='queued' AND created < ?").bind(t - 86400),
-    ]);
+      env.DB.prepare("DELETE FROM outages WHERE start < ?").bind(t - 180 * 86400),
+      env.DB.prepare("DELETE FROM drives WHERE start < ?").bind(t - 180 * 86400),
+      env.DB.prepare("DELETE FROM speedtests WHERE at < ?").bind(t - 365 * 86400),
+    ];
+    // If "keep footage for N days" is on, the Pi clears old footage from Drive; drop the matching entries here too.
+    if (st.retention_days) jobs.push(env.DB.prepare("DELETE FROM clips WHERE uploaded_at < ?").bind(t - st.retention_days * 86400));
+    await env.DB.batch(jobs);
   },
 };

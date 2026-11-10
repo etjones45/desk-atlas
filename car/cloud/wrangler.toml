@@ -22,4 +22,4 @@ VAPID_PUBLIC = "BMGbZAa7DpfyttREkTwFre4dasx4coI-D-dL4BGPhLRu678aEgfX0aZtR3MUKFhZ
 VAPID_SUBJECT = "mailto:skethanjones@gmail.com"
 
 [triggers]
-crons = ["17 */6 * * *"]
+crons = ["7 * * * *"]

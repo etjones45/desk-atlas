@@ -29,6 +29,12 @@ Orange Pi Zero 2W in the glovebox + Starlink Mini in the back window. Current ve
 - **Auto-updates** from the `car` branch at boot, every 30 min, and right away when the app reports a
   newer version. Updates never restart the dashcam drive.
 
+## App-controlled settings
+Upload rules, speed tests, heat protection, Drive retention and the data plan are set in the app and sent to the
+Pi with every check-in (`/var/lib/car-atlas/app_settings.json`, see `DEFAULT_SETTINGS` in `atlas/common.py`).
+Add-ons live in `atlas/extras.py` (drops, offline catch-up, energy, devices, sky view, speed tests, housekeeping).
+Upgrading an existing database: `cloud/migrate-1.2.sql`.
+
 ## Versions
 `car/VERSION` is the release number. The Pi reports what it runs; the app (Pi tab → Software) compares it
 with `VERSION` on GitHub ("should be on"). Release = bump `car/VERSION` + `APP_VERSION` in

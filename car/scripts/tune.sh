@@ -56,6 +56,7 @@ done
 need=""
 command -v fsck.exfat >/dev/null 2>&1 || need="$need exfatprogs"
 command -v mdir >/dev/null 2>&1 || need="$need mtools"
+command -v arp-scan >/dev/null 2>&1 || need="$need arp-scan"   # counts devices on the car WiFi
 if [ -n "$need" ] && timeout 5 bash -c '</dev/tcp/deb.debian.org/80' 2>/dev/null; then
   # shellcheck disable=SC2086
   if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $need >/dev/null 2>&1 \

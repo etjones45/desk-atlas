@@ -16,9 +16,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (RUN_DIR, STATE_DIR, alert, cfg_int, cloud, cloud_ready, db, drive_ready,  # noqa: E402
-                    attach_image, detach_loops, drive_remote, fs_type, internet_up, load_config, log, network_kind,
-                    rclone, read_json, run, today, usb_info, wifi_info, write_json)
+from common import (RUN_DIR, SPEED_LIMITS, STATE_DIR, alert, app_settings, attach_image, cfg_int, cloud,  # noqa: E402
+                    cloud_ready, cpu_temp, db, detach_loops, drive_ready, drive_remote, fs_type, internet_up,
+                    load_config, log, network_kind, rclone, rclone_progress, read_json, run, today,
+                    usb_info, wifi_info, write_json)
 
 C = "uploader"
 MNT = RUN_DIR / "teslacam-ro"
@@ -83,8 +84,9 @@ def image_usage(mnt: Path) -> dict:
         return {}
 
 
-def budget_left_bytes(conn, cfg) -> int:
-    cap = cfg_int(cfg, "STARLINK_DAILY_UPLOAD_CAP_MB", 5000) * 1_000_000
+def budget_left_bytes(conn, cfg, settings: dict | None = None) -> int:
+    cap_mb = (settings or {}).get("starlink_cap_mb") or cfg_int(cfg, "STARLINK_DAILY_UPLOAD_CAP_MB", 5000)
+    cap = int(cap_mb) * 1_000_000
     row = conn.execute("SELECT starlink_bytes FROM upload_budget WHERE day=?", (today(),)).fetchone()
     return cap - (row[0] if row else 0)
 
@@ -96,11 +98,81 @@ def add_budget(conn, nbytes: int) -> None:
     conn.commit()
 
 
-def upload_folder(cfg, src: Path, dest_folder_id: str, name: str, bwlimit: str) -> tuple[bool, str]:
-    code, out = rclone(["copy", str(src), drive_remote(dest_folder_id, name),
-                        "--transfers", "2", "--checkers", "4"],
-                       timeout=6 * 3600, bwlimit=bwlimit)
+def upload_folder(cfg, src: Path, dest_folder_id: str, name: str, bwlimit: str, st: dict | None = None) -> tuple[bool, str]:
+    def progress(p: dict) -> None:
+        up = (st or {}).get("uploading")
+        if not up or not p.get("total"):
+            return
+        up.update({"pct": round(100 * p["bytes"] / p["total"]), "eta_s": p.get("eta"),
+                   "kbps": round((p.get("speed") or 0) * 8 / 1000), "at": time.time()})
+        write_json(STATE_FILE, st)
+
+    code, out = rclone_progress(["copy", str(src), drive_remote(dest_folder_id, name),
+                                 "--transfers", "2", "--checkers", "4"],
+                                timeout=6 * 3600, bwlimit=bwlimit, on_stats=progress)
     return code == 0, out[-400:]
+
+
+CAMERAS = ("front", "back", "left_repeater", "right_repeater", "left_pillar", "right_pillar")
+
+
+def drive_file_links(dest_folder_id: str, name: str) -> list | None:
+    """Drive IDs of each camera's video in an uploaded clip folder, so the app can open one directly.
+    Returns [[minute_stamp, camera, drive_id], ...] newest minute first (capped)."""
+    code, out = rclone(["lsjson", "-R", "--files-only", "--no-modtime", "--no-mimetype",
+                        drive_remote(dest_folder_id, name)], timeout=120)
+    if code != 0:
+        return None
+    try:
+        items = json.loads(out[out.index("["):])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    rows = []
+    for it in items:
+        n, fid = it.get("Name") or "", it.get("ID")
+        if not fid or not n.lower().endswith(".mp4") or len(n) < 24:
+            continue
+        stamp, cam = n[:19], n[20:-4]
+        rows.append([stamp, cam if cam in CAMERAS else cam[:20], fid])
+    rows.sort(key=lambda r: (r[0], CAMERAS.index(r[1]) if r[1] in CAMERAS else 9), reverse=False)
+    rows.sort(key=lambda r: r[0], reverse=True)
+    return rows[:72] or None
+
+
+def drive_about(st: dict) -> None:
+    """How full Google Drive is (checked every 30 min)."""
+    if time.time() - (st.get("drive") or {}).get("at", 0) < 1800:
+        return
+    code, out = rclone(["about", "gdrive:", "--json"], timeout=60)
+    if code != 0:
+        return
+    try:
+        j = json.loads(out[out.index("{"):])
+    except (ValueError, json.JSONDecodeError):
+        return
+    gb = lambda v: round(v / 1e9, 1) if isinstance(v, (int, float)) else None  # noqa: E731
+    st["drive"] = {"at": time.time(), "total_gb": gb(j.get("total")), "used_gb": gb(j.get("used")),
+                   "free_gb": gb(j.get("free")), "trash_gb": gb(j.get("trashed"))}
+
+
+def apply_retention(cfg, st: dict, days: int) -> None:
+    """If turned on in the app: once a day, move Drive footage older than N days to Drive's trash."""
+    if not days or days < 7:
+        return
+    if time.time() - st.get("retention_at", 0) < 20 * 3600:
+        return
+    removed = 0
+    for fid in (cfg["DRIVE_DASHCAM_ID"], cfg["DRIVE_SENTRY_ID"]):
+        code, out = rclone(["delete", drive_remote(fid), "--min-age", f"{int(days)}d", "-v"], timeout=900)
+        if code != 0:
+            log(C, f"retention: delete failed: {out[-200:]}")
+            return
+        removed += out.count("Deleted")
+        rclone(["rmdirs", drive_remote(fid), "--leave-root"], timeout=900)
+    st["retention_at"] = time.time()
+    st["retention"] = {"at": time.time(), "days": int(days), "files_removed": removed}
+    if removed:
+        log(C, f"retention: moved {removed} files older than {days} days to Drive trash")
 
 
 def drive_folder_id(dest_folder_id: str, name: str) -> str | None:
@@ -119,9 +191,14 @@ def post_clip(cfg, kind: str, src: Path | None, dest_id: str, name: str, size: i
         return
     info = {"kind": kind, "folder": name, "size_mb": round(size / 1e6, 1), "network": net,
             "drive_id": drive_folder_id(dest_id, name)}
+    try:
+        info["files"] = drive_file_links(dest_id, name)
+    except Exception as e:  # noqa: BLE001 - links are a nicety
+        log(C, f"file links failed: {e}")
     if src is not None:
         ev = read_json(src / "event.json", {}) or {}
-        info.update({"reason": ev.get("reason"), "city": ev.get("city"), "event_ts": ev.get("timestamp")})
+        info.update({"reason": ev.get("reason"), "city": ev.get("city"), "event_ts": ev.get("timestamp"),
+                     "camera": ev.get("camera")})
         for k_src, k_dst in (("est_lat", "lat"), ("est_lon", "lon")):
             try:
                 info[k_dst] = float(ev.get(k_src)) if ev.get(k_src) not in (None, "") else None
@@ -268,6 +345,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         queue = []
         seen = set()
         counts = {"dashcam": 0, "sentry": 0, "encrypted": 0}
+        pending_bytes = 0
         for sub, dest_id, kind in kinds:
             base = cam / sub
             if not base.is_dir():
@@ -283,6 +361,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                 if row and row[0] == sig:
                     continue
                 counts[kind] += 1
+                pending_bytes += size
                 # Only upload once the car has stopped writing to this folder
                 if pending.get(key) == sig:
                     queue.append((kind, folder, dest_id, sig, size))
@@ -290,6 +369,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         for stale in [k for k in pending if k not in seen]:
             pending.pop(stale, None)
         st["pending"] = counts
+        st["pending_mb"] = round(pending_bytes / 1e6)
         st["recent_folder_present"] = (cam / "RecentClips").is_dir()
 
         if not online or not drive_ready():
@@ -303,27 +383,74 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     req.unlink(missing_ok=True)
             return
         st["waiting_for"] = None
-        bwlimit = cfg.get("UPLOAD_LIMIT_STARLINK", "375k") if net == "starlink" else cfg.get("UPLOAD_LIMIT_OTHER", "0")
+        S = app_settings()
+        st["settings_rev"] = S.get("rev")
+        if net == "starlink":
+            bwlimit = SPEED_LIMITS.get(str(S.get("starlink_speed")), cfg.get("UPLOAD_LIMIT_STARLINK", "375k"))
+        else:
+            bwlimit = cfg.get("UPLOAD_LIMIT_OTHER", "0")
+        st["bwlimit"] = bwlimit
 
+        try:
+            drive_about(st)
+            apply_retention(cfg, st, int(S.get("retention_days") or 0))
+        except Exception as e:  # noqa: BLE001
+            log(C, f"drive check failed: {e}")
+        drive_free = (st.get("drive") or {}).get("free_gb")
+        if drive_free is not None and drive_free < 5:
+            alert(cfg, "Google Drive is almost full",
+                  f"Only {drive_free} GB left in Google Drive. Clips stop uploading when it runs out.",
+                  key="drive-low", cooldown_s=24 * 3600, tags="warning")
+
+        # Something you asked for in the app always goes, even when automatic uploads are held.
         try:
             handle_recent_requests(cfg, mnt, bwlimit, net, st)
         except Exception as e:  # noqa: BLE001
             log(C, f"recent request failed: {e}")
 
+        # Reasons to hold automatic uploads for now
+        temp = cpu_temp()
+        if S.get("heat_protect") and temp is not None:
+            if temp >= cfg_int(cfg, "PI_HOT_PAUSE_C", 84):
+                st["hot"] = True
+            elif temp <= cfg_int(cfg, "PI_HOT_RESUME_C", 78):
+                st["hot"] = False
+        else:
+            st["hot"] = False
+        hold = None
+        if S.get("uploads_paused"):
+            hold = "you (uploads are paused in the app)"
+        elif st.get("hot"):
+            hold = "the Pi to cool down"
+        elif drive_free is not None and drive_free < 2:
+            hold = "space in Google Drive (it's full)"
+        if hold:
+            if queue:
+                st["waiting_for"] = hold
+            return
+
         for kind, folder, dest_id, sig, size in queue:
             if net == "starlink":
-                if kind == "sentry" and cfg.get("UPLOAD_SENTRY_ON_STARLINK", "1") != "1":
+                if kind == "sentry" and (not S.get("sentry_on_starlink") or cfg.get("UPLOAD_SENTRY_ON_STARLINK", "1") != "1"):
+                    st["waiting_for"] = "home WiFi (Sentry uploads over Starlink are off)"
                     continue
-                if size > budget_left_bytes(conn, cfg):
-                    st["waiting_for"] = "home wifi (today's Starlink upload cap reached)"
-                    alert(cfg, "Upload cap reached",
+                if kind != "sentry" and not S.get("uploads_on_starlink"):
+                    st["waiting_for"] = "home WiFi (Starlink uploads are off)"
+                    continue
+                if S.get("plan_protect") and (S.get("plan_pct") or 0) >= 90:
+                    st["waiting_for"] = "home WiFi (this month's Starlink data is almost used up)"
+                    continue
+                if size > budget_left_bytes(conn, cfg, S):
+                    st["waiting_for"] = "home WiFi (today's Starlink upload limit is reached)"
+                    alert(cfg, "Upload limit reached",
                           "Today's Starlink upload limit is used up. The rest uploads on home WiFi.",
                           key="cap-" + today(), cooldown_s=86400, tags="warning", category="info")
                     continue
             log(C, f"uploading {kind} {folder.name} ({size/1e6:.0f} MB) over {net}")
-            st["uploading"] = {"kind": kind, "folder": folder.name, "mb": round(size / 1e6), "since": time.time()}
+            st["uploading"] = {"kind": kind, "folder": folder.name, "mb": round(size / 1e6), "since": time.time(),
+                               "pct": 0, "eta_s": None, "kbps": None}
             write_json(STATE_FILE, st)
-            ok, detail = upload_folder(cfg, folder, dest_id, folder.name, bwlimit)
+            ok, detail = upload_folder(cfg, folder, dest_id, folder.name, bwlimit, st)
             st["uploading"] = None
             if ok:
                 conn.execute("INSERT OR REPLACE INTO uploads VALUES(?,?,?,?,?,?)",
@@ -333,6 +460,9 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     add_budget(conn, size)
                 st["last_upload"] = {"kind": kind, "folder": folder.name, "mb": round(size / 1e6), "at": time.time()}
                 st["last_error"] = None
+                if st.get("pending", {}).get(kind):
+                    st["pending"][kind] -= 1
+                st["pending_mb"] = max(0, (st.get("pending_mb") or 0) - round(size / 1e6))
                 post_clip(cfg, "sentry" if kind == "sentry" else "dashcam", folder, dest_id, folder.name, size, net)
                 label = "Sentry event" if kind == "sentry" else "Dashcam clip"
                 alert(cfg, f"{label} saved to Drive", f"{folder.name} ({size/1e6:.0f} MB) uploaded.",

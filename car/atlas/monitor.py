@@ -13,10 +13,12 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (RUN_DIR, SRC_DIR, STATE_DIR, alert, cfg_int, clock_synced, cloud,  # noqa: E402
-                    cloud_ready, db, drive_ready, drive_remote, git_sha, internet_up, load_config, log,
-                    network_kind, rclone, read_json, read_text, run, today, usb_info, usb_kernel_log, usb_lowlevel, version,
-                    wifi_info, write_json)
+from common import (RUN_DIR, SRC_DIR, STATE_DIR, alert, app_settings, cfg_int, clock_synced, cloud,  # noqa: E402
+                    cloud_ready, db, drive_ready, drive_remote, flush_outbox, git_sha, internet_up, load_config,
+                    log, network_kind, rclone, read_json, read_text, run, save_app_settings, today, usb_info,
+                    usb_kernel_log, usb_lowlevel, version, wifi_info, write_json)
+from extras import (OUTPUT_COMMANDS, Backlog, Energy, OutageLog, SpeedRunner, count_devices,  # noqa: E402
+                    guarded, housekeeping, push_skymap, run_output_command)
 from gps import GPSReader  # noqa: E402
 
 C = "monitor"
@@ -122,6 +124,9 @@ class Dish:
             "software": status.get("software_version"),
             "hardware": status.get("hardware_version"),
             "gps_sats": status.get("gps_sats"),
+            "azimuth": _r(status.get("direction_azimuth"), 0),
+            "elevation": _r(status.get("direction_elevation"), 0),
+            "snr_ok": status.get("is_snr_above_noise_floor"),
             "alerts": sorted(k.replace("alert_", "") for k, v in (alerts or {}).items() if v),
             "location": None,
         }
@@ -221,10 +226,16 @@ class UsbWatch:
         self.connected_this_boot = False
         self.klog_at = 0.0
         self.klog: list[str] = []
+        self.was_connected = False
+        self.drops = 0            # times the car let go of the drive since the Pi turned on
+        self.deep_retry = False
 
     def check(self, cfg, usb: dict, uptime: int) -> dict:
         info = dict(usb)
         connected = usb.get("car_connected")
+        if self.was_connected and not connected and usb.get("state") != "suspended":
+            self.drops += 1
+        self.was_connected = bool(connected) or (self.was_connected and usb.get("state") == "suspended")
         if connected:
             self.not_attached_since = None
             if not self.connected_this_boot:
@@ -246,6 +257,13 @@ class UsbWatch:
                 self.rebound = True
                 log(C, "car hasn't connected to the dashcam drive; re-offering it")
                 run([GADGET_SH, "rebind"], timeout=30)
+            # Still nothing: take the drive fully down and set it up again from scratch, once.
+            if waited > 150 and not self.deep_retry and uptime > 200 and not self.connected_this_boot:
+                self.deep_retry = True
+                log(C, "car still hasn't connected; setting the dashcam drive up again from scratch")
+                run([GADGET_SH, "stop"], timeout=30)
+                time.sleep(2)
+                run([GADGET_SH, "start"], timeout=180)
             if waited > 180 and uptime > 240 and self.ever_connected and not self.connected_this_boot:
                 alert(cfg, "Car isn't seeing the dashcam drive",
                       "The Pi is on but the car hasn't connected to it. Check the cable is in the Pi's USB0 port.",
@@ -264,24 +282,29 @@ class UsbWatch:
         info["ever_connected"] = self.ever_connected
         info["connected_this_boot"] = self.connected_this_boot
         info["rebind_tried"] = self.rebound
+        info["deep_retry_tried"] = self.deep_retry
+        info["drops"] = self.drops
+        lw = usb.get("last_write_epoch")
+        info["writing"] = bool(connected and lw and time.time() - lw < 120)
         return info
 
 
 def usb_hint(usb: dict, uptime: int) -> str | None:
     if usb.get("gadget") == "unsupported" or not usb.get("udcs"):
-        return "This Pi isn't offering USB drive mode. Run 'sudo car-atlas doctor' for details."
+        return "This Pi isn't offering USB drive mode. Run the health check from the app's Pi tab for details."
     if usb.get("usb0_host_overlay"):
         return "USB0 is set to host mode in orangepi-config. Turn off the usb0-host overlay so the car can see the drive."
     if usb.get("car_connected"):
         return None
     if usb.get("state") in ("not attached", None):
-        return ("The car isn't connected to the Pi's USB0 port. The cable from the glovebox must go into USB0: "
-                "the USB-C port at the end of the board, next to the antenna, farthest from the mini-HDMI.")
+        return ("The Pi is ready, but nothing is talking to it over the cable. Check three things: the cable is in "
+                "USB0 (the USB-C port at the end of the board, next to the antenna); flip the USB-C plug over and "
+                "push it back in; and try a different cable, because some only carry power.")
     return f"USB link is '{usb.get('state')}'. The car is talking to the Pi but hasn't finished connecting."
 
 
 # ---------------------------------------------------------------- app commands
-def run_commands(cfg, dish: Dish, net: str) -> None:
+def run_commands(cfg, dish: Dish, net: str, speed: SpeedRunner | None = None) -> None:
     """Do what the app asked for (Save recent dashcam, restart Starlink, etc.)."""
     r = cloud(cfg, "GET", "/api/pi/commands", timeout=10)
     for c in (r or {}).get("commands", []):
@@ -323,6 +346,13 @@ def run_commands(cfg, dish: Dish, net: str) -> None:
             time.sleep(3)
             state = usb_info().get("state")
             done(code == 0, f"Re-offered the dashcam drive. USB link is now: {state}.")
+        elif kind in OUTPUT_COMMANDS:
+            ok, text = run_output_command(kind, SRC_DIR / "scripts")
+            cloud(cfg, "POST", f"/api/pi/commands/{cid}",
+                  {"ok": True, "result": f"{OUTPUT_COMMANDS[kind]} finished. Tap to read it.", "output": text}, timeout=20)
+        elif kind == "speedtest":
+            if not speed or not speed.start(cfg, "full", net, command_id=cid):
+                done(False, "A speed test is already running. Give it a few seconds.")
         elif kind in ("usb_fix", "usb_fix_undo"):
             done(True, "Applying the USB setting change and restarting the Pi (back in about 2 minutes).")
             run(["systemd-run", "--on-active=3", USB_FIX_SH] + (["undo"] if kind == "usb_fix_undo" else []), timeout=15)
@@ -408,6 +438,15 @@ def main() -> None:
     last_cloud_status = last_cloud_cov = last_cmd_poll = 0.0
     last_update_kick = time.time() - 600  # give the boot-time update check a head start
     last_location = (read_json(MON_STATE, {}) or {}).get("last_location")
+    conn0 = db()
+    outages = OutageLog(conn0)
+    conn0.close()
+    backlog = Backlog()
+    energy = Energy(MON_STATE)
+    speedrun = SpeedRunner(MON_STATE)
+    devices = None
+    last_devices = last_skymap = last_house = last_outage_push = last_flush = 0.0
+    house: dict = {}
     version_noted = False
     synced, synced_at = False, 0.0
     log(C, f"started v{version()}")
@@ -458,6 +497,20 @@ def main() -> None:
 
             dish.maybe_reboot(cfg, d, net == "starlink")
             usb = usbw.check(cfg, usb_info(), pi.get("uptime_s") or 0)
+
+            # ---- v1.2 add-ons (each one is guarded: a failure here never stops the loop) ----
+            S = app_settings()
+            outage_now = guarded("drop log", outages.update, conn, net == "starlink", d, synced)
+            outages_today = guarded("drop summary", outages.today_summary, conn, default={"count": 0, "seconds": 0})
+            wh_today = guarded("energy", energy.add, d.get("power_w"), net == "starlink" and bool(d.get("reachable")), default=None)
+            if net == "starlink" and time.time() - last_devices > 180:
+                last_devices = time.time()
+                devices = guarded("device count", count_devices) or devices
+            elif net != "starlink":
+                devices = None
+            if time.time() - last_house > 300:
+                last_house = time.time()
+                house = guarded("housekeeping", housekeeping, default={}) or {}
             up = read_json(RUN_DIR / "uploader.json", {}) or {}
             u = conn.execute("SELECT down_bytes, up_bytes FROM usage WHERE day=?", (today(),)).fetchone()
             online = internet_up()
@@ -471,6 +524,9 @@ def main() -> None:
                 "pi": dict(pi, wifi_ssid=wifi["ssid"], wifi_signal=wifi["signal"], network=net, internet=online),
                 "starlink": dict(d, quality=q, last_contact_epoch=dish.last_ok or None,
                                  location_supported=dish.location_supported,
+                                 energy_today_wh=wh_today, devices=devices,
+                                 outage=outage_now, outages_today=outages_today,
+                                 speedtest=speedrun.last, speedtest_running=speedrun.busy(),
                                  usage_today_mb={"down": round((u[0] if u else 0) / 1e6),
                                                  "up": round((u[1] if u else 0) / 1e6)}),
                 "link": {"pi_on_starlink_wifi": net == "starlink",
@@ -488,6 +544,10 @@ def main() -> None:
                     "image": up.get("image"),
                     "pending": {"dashcam": (pend.get("dashcam") or 0) + (pend.get("encrypted") or 0),
                                 "sentry": pend.get("sentry") or 0} if up.get("pending") else None,
+                    "pending_mb": up.get("pending_mb"),
+                    "hot_hold": bool(up.get("hot")),
+                    "bwlimit": up.get("bwlimit"),
+                    "retention": up.get("retention"),
                     "uploading": up.get("uploading"),
                     "last_upload": up.get("last_upload"),
                     "last_error": up.get("last_error"),
@@ -498,6 +558,9 @@ def main() -> None:
                     "last_cleanup": up.get("last_cleanup"),
                 },
                 "drive_setup": drive_ready(),
+                "drive": up.get("drive"),
+                "settings_rev": S.get("rev"),
+                "housekeeping": house or None,
                 "cloud": cloud_ready(cfg),
                 "alerts_recent": (read_json(STATE_DIR / "alerts_recent.json", []) or [])[:8],
             }
@@ -527,13 +590,17 @@ def main() -> None:
                       key="dish-lost", cooldown_s=3600, tags="satellite")
 
             # ---- report to car.etjarvis.com and pick up commands from the app ----
+            posted = False
             if online and cloud_ready(cfg):
                 if time.time() - last_cloud_status >= 30:
                     resp = cloud(cfg, "POST", "/api/pi/status", status, timeout=10)
                     if resp is not None:
+                        posted = True
                         last_cloud_status = time.time()
                         if resp.get("commands_waiting"):
                             last_cmd_poll = 0.0
+                        if isinstance(resp.get("settings"), dict) and save_app_settings(resp["settings"]):
+                            log(C, f"settings from the app updated (rev {resp['settings'].get('rev')})")
                         # The app knows a newer version exists: pull it now instead of waiting for the timer.
                         newer = resp.get("latest_version")
                         if newer and version_tuple(newer) > version_tuple(version()) \
@@ -541,12 +608,32 @@ def main() -> None:
                             last_update_kick = time.time()
                             log(C, f"v{newer} is available (running v{version()}); updating now")
                             run(["systemctl", "start", "--no-block", "car-atlas-update.service"], timeout=15)
+                else:
+                    posted = True      # between check-ins; nothing was missed
                 if time.time() - last_cmd_poll >= 30:
                     last_cmd_poll = time.time()
-                    run_commands(cfg, dish, net)
+                    run_commands(cfg, dish, net, speedrun)
                 if time.time() - last_cloud_cov >= 120:
                     last_cloud_cov = time.time()
                     push_coverage(cfg, conn)
+                if posted and time.time() - last_flush >= 60:
+                    last_flush = time.time()
+                    guarded("outbox", flush_outbox, cfg)
+                    guarded("catch-up", backlog.flush, cfg, conn)
+                if time.time() - last_outage_push >= 120:
+                    last_outage_push = time.time()
+                    guarded("drop upload", outages.push, cfg, conn)
+                if net == "starlink" and d.get("reachable") and time.time() - last_skymap >= 1200 \
+                        and (pi.get("uptime_s") or 0) > 180:
+                    last_skymap = time.time()
+                    guarded("sky view", push_skymap, cfg, starlink_grpc, dish.ctx)
+                # One small automatic speed test a day, when the connection is healthy and nothing is uploading.
+                if (S.get("auto_speedtest") and net == "starlink" and q == "good" and not up.get("uploading")
+                        and (pi.get("uptime_s") or 0) > 300 and not speedrun.ran_today() and not speedrun.busy()
+                        and (S.get("plan_pct") or 0) < 90):
+                    speedrun.start(cfg, "light", net, auto=True)
+            if not posted and synced and cloud_ready(cfg):
+                guarded("catch-up store", backlog.keep, conn, status)
 
             # ---- backup status file in Google Drive ----
             if online and drive_ready() and time.time() - last_status_push >= max(status_s, 120):

@@ -37,10 +37,12 @@ case "${1:-}" in
   usb-fix) shift; exec "$S/usb-fix.sh" "$@" ;;
   usb-rebind) exec "$S/teslacam-gadget.sh" rebind ;;
   usb-debug) exec "$S/usb-debug.sh" ;;
+  speedtest) exec /opt/car-atlas/venv/bin/python /opt/car-atlas/src/car/atlas/speedcheck.py "${2:-full}" ;;
+  settings) cat /var/lib/car-atlas/app_settings.json 2>/dev/null || echo "No settings from the app yet" ;;
   version) echo "Car Atlas v$(cat /opt/car-atlas/src/car/VERSION) ($(git -C /opt/car-atlas/src rev-parse --short HEAD))" ;;
   logs) exec journalctl -u car-atlas-teslacam -u car-atlas-uploader -u car-atlas-monitor -u car-atlas-update -u car-atlas-tune -n 100 --no-pager ;;
   status) cat /var/lib/car-atlas/status.json ;;
-  *) echo "car-atlas doctor | version | drive-setup | pair CODE | update | usb-debug | usb-rebind | usb-fix [undo] | logs | status" ;;
+  *) echo "car-atlas doctor | version | drive-setup | pair CODE | update | speedtest | settings | usb-debug | usb-rebind | usb-fix [undo] | logs | status" ;;
 esac
 EOF
 chmod +x /usr/local/bin/car-atlas

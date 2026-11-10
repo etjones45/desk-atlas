@@ -6,6 +6,7 @@ import os
 import socket
 import sqlite3
 import subprocess
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -75,7 +76,74 @@ def usb_info() -> dict:
         "usb0_host_overlay": any("usb0-host" in o for o in overlays),
         "otg_fix_installed": any("car-atlas-usb0-otg" in o for o in overlays),
         "image_gb": round(os.path.getsize(img) / 1e9, 1) if os.path.exists(img) else None,
+        # The car writing video to the drive bumps the image file's modified time.
+        "last_write_epoch": _mtime(img),
     }
+
+
+def _mtime(path: str) -> float | None:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def cpu_temp() -> float | None:
+    try:
+        return round(int(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000, 1)
+    except (OSError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------- settings from the app
+# The app (car.etjarvis.com) owns these. The Pi gets them with every check-in and keeps a copy
+# on disk so they still apply when it's offline.
+SETTINGS_FILE = STATE_DIR / "app_settings.json"
+DEFAULT_SETTINGS = {
+    "uploads_paused": False,        # hold all footage uploads
+    "uploads_on_starlink": True,    # upload saved dashcam clips over Starlink
+    "sentry_on_starlink": True,     # upload Sentry events over Starlink
+    "starlink_cap_mb": 5000,        # footage per day over Starlink
+    "starlink_speed": "normal",     # slow | normal | fast | max
+    "auto_speedtest": True,         # one small speed test a day on Starlink
+    "retention_days": 0,            # delete Drive footage older than this (0 = keep forever)
+    "heat_protect": True,           # pause uploads while the Pi is hot
+    "plan_protect": True,           # hold Starlink uploads when the data plan is nearly used
+    "plan_pct": None,               # filled in by the app: % of this month's data plan used
+}
+SPEED_LIMITS = {"slow": "190k", "normal": "375k", "fast": "1M", "max": "0"}
+
+
+def app_settings() -> dict:
+    out = dict(DEFAULT_SETTINGS)
+    saved = read_json(SETTINGS_FILE, {}) or {}
+    for k, default in DEFAULT_SETTINGS.items():
+        v = saved.get(k)
+        if v is None:
+            continue
+        if isinstance(default, bool):
+            out[k] = bool(v)
+        elif isinstance(default, int) and not isinstance(default, bool):
+            try:
+                out[k] = int(v)
+            except (TypeError, ValueError):
+                pass
+        else:
+            out[k] = v
+    out["rev"] = saved.get("rev")
+    return out
+
+
+def save_app_settings(new: dict) -> bool:
+    """Store settings sent by the app. Returns True when something changed."""
+    if not isinstance(new, dict):
+        return False
+    cur = read_json(SETTINGS_FILE, {}) or {}
+    keep = {k: new[k] for k in list(DEFAULT_SETTINGS) + ["rev"] if k in new}
+    if keep == cur:
+        return False
+    write_json(SETTINGS_FILE, keep)
+    return True
 
 
 def usb_lowlevel(udc: str | None) -> dict:
@@ -224,6 +292,9 @@ def db() -> sqlite3.Connection:
             kind TEXT, folder TEXT, sig TEXT, bytes INTEGER, uploaded_at REAL, network TEXT,
             PRIMARY KEY(kind, folder));
         CREATE TABLE IF NOT EXISTS upload_budget(day TEXT PRIMARY KEY, starlink_bytes INTEGER);
+        CREATE TABLE IF NOT EXISTS outages(
+            start REAL PRIMARY KEY, end REAL, cause TEXT, sent INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS backlog(ts REAL PRIMARY KEY, row TEXT);
         """
     )
     return conn
@@ -300,6 +371,54 @@ def rclone(args: list[str], timeout: int = 120, bwlimit: str | None = None) -> t
     if bwlimit and bwlimit != "0":
         cmd += ["--bwlimit", bwlimit]
     return run(cmd + args, timeout=timeout)
+
+
+def rclone_progress(args: list[str], timeout: int = 6 * 3600, bwlimit: str | None = None,
+                    on_stats=None) -> tuple[int, str]:
+    """Like rclone(), but calls on_stats({"bytes","total","speed","eta"}) every ~15 s while it runs."""
+    cmd = ["rclone", "--config", str(RCLONE_CONF), "--retries", "3", "--low-level-retries", "10",
+           "--contimeout", "20s", "--timeout", "60s",
+           "--stats", "15s", "--use-json-log", "--stats-log-level", "NOTICE"]
+    if bwlimit and bwlimit != "0":
+        cmd += ["--bwlimit", bwlimit]
+    tail: list[str] = []
+    try:
+        p = subprocess.Popen(cmd + args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    except FileNotFoundError as e:
+        return 124, str(e)
+    deadline = time.time() + timeout
+    killer = threading.Timer(timeout, p.kill)
+    killer.daemon = True
+    killer.start()
+    try:
+        for line in p.stderr:              # ends when rclone exits (or is killed at the deadline)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                j = json.loads(line)
+            except ValueError:
+                tail.append(line[:300])
+                continue
+            st = j.get("stats")
+            if st and on_stats:
+                try:
+                    on_stats({"bytes": st.get("bytes") or 0, "total": st.get("totalBytes") or 0,
+                              "speed": st.get("speed") or 0, "eta": st.get("eta")})
+                except Exception:  # noqa: BLE001 - progress is a nicety
+                    pass
+            elif not st:
+                tail.append(str(j.get("msg", ""))[:300])
+            del tail[:-8]
+        code = p.wait(timeout=30)
+    except Exception as e:  # noqa: BLE001
+        p.kill()
+        return 124, str(e)
+    finally:
+        killer.cancel()
+    if time.time() >= deadline and code != 0:
+        return 124, "timed out"
+    return code, "\n".join(tail)
 
 
 def notify(cfg: dict, title: str, message: str, key: str | None = None,
@@ -379,12 +498,42 @@ def alert(cfg: dict, title: str, message: str, key: str, cooldown_s: int = 3600,
         sent[key] = now
         write_json(sent_path, sent)
     if to_cloud and cloud_ready(cfg):
-        cloud(cfg, "POST", "/api/pi/alert", {"title": title, "message": message, "category": category,
-                                              "link": "/#footage" if category == "clip" else "/#home"})
+        payload = {"title": title, "message": message, "category": category, "at": now,
+                   "link": "/#footage" if category == "clip" else "/#home"}
+        if cloud(cfg, "POST", "/api/pi/alert", payload) is None:
+            queue_for_cloud("/api/pi/alert", payload)
     if (cfg.get("NTFY_TOPIC") or "").strip():
         notify(cfg, title, message, key=None, tags=tags, click=click)
     else:
         record_alert_locally(title, message)
+
+
+OUTBOX = STATE_DIR / "outbox.json"
+
+
+def queue_for_cloud(path: str, payload: dict) -> None:
+    """Couldn't reach the app (no internet). Keep it and send it when we're back online."""
+    box = read_json(OUTBOX, []) or []
+    box.append({"path": path, "data": payload, "at": time.time()})
+    write_json(OUTBOX, box[-60:])
+
+
+def flush_outbox(cfg: dict) -> int:
+    box = read_json(OUTBOX, []) or []
+    if not box:
+        return 0
+    sent = 0
+    while box:
+        item = box[0]
+        if time.time() - item.get("at", 0) > 3 * 86400:      # too old to matter
+            box.pop(0)
+            continue
+        if cloud(cfg, "POST", item["path"], item["data"], timeout=15) is None:
+            break
+        box.pop(0)
+        sent += 1
+    write_json(OUTBOX, box)
+    return sent
 
 
 def today() -> str:

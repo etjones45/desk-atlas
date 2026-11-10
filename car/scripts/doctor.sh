@@ -28,7 +28,10 @@ else
   echo "         -> The cable from the glovebox must be in the Pi's USB0 port: the USB-C port at the END of"
   echo "            the board, next to the little antenna connector, farthest from the mini-HDMI."
   echo "            (USB1, the middle port, is host-only, so the car can't see a drive through it.)"
-  echo "         -> The car must be awake. Try a different cable if it still won't connect."
+  echo "         -> Flip the USB-C plug over and push it back in. Then try a different cable (some only charge)."
+  echo "         -> The car must be awake."
+  echo "         -> Sure-fire test: plug the Pi's USB0 into a computer with the same cable. A drive named"
+  echo "            TESLACAM should show up. If it does, the Pi and cable are fine."
 fi
 DR=$(tr -d '\0' 2>/dev/null < /sys/firmware/devicetree/base/soc/usb@5100000/dr_mode)
 info "USB0 mode: ${DR:-unknown}   controllers: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')"
