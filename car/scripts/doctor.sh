@@ -67,3 +67,10 @@ echo "-- Pi"
 info "Temp: $(awk '{printf "%.1f C", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null)   CPU: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)   SD free: $(df -h / | awk 'NR==2{print $4}')   Time zone: $(readlink -f /etc/localtime | sed 's|.*/zoneinfo/||')"
 UP=$(cat /run/car-atlas/uploader.json 2>/dev/null)
 [ -n "$UP" ] && info "Uploader: $(echo "$UP" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("pending",d.get("pending"),"| waiting for",d.get("waiting_for"),"| last upload",(d.get("last_upload") or {}).get("folder"))' 2>/dev/null)"
+[ -n "$UP" ] && echo "$UP" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+t=d.get("tree") or []
+if t: print("-- What the car has put on the drive"); [print("  [..]   "+x) for x in t]
+dr=d.get("drive")
+if dr: print("  [..]   Google Drive: %s of %s GB used, %s GB free" % (dr.get("used_gb"), dr.get("total_gb"), dr.get("free_gb")))' 2>/dev/null
+exit 0

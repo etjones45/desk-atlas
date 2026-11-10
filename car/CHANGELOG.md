@@ -1,5 +1,9 @@
 # Car Atlas versions
 
+## 1.2.1 (2026-11-10)
+- The car keeps writing into its EncryptedClips folder while recording, so the Pi no longer treats that
+  folder as a finished clip to upload. The health check now lists what the car has put on the drive.
+
 ## 1.2 (2026-11-10)
 - Run the Pi's health check, USB check, logs and "what's it doing" from the app and read the report there. No laptop needed.
 - Speed tests: run one from the app, plus one small automatic test a day. History chart on the Starlink tab.

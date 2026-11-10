@@ -60,6 +60,43 @@ class ReadOnlyView:
         self.loops = []
 
 
+def drive_tree(mnt: Path) -> list:
+    """A short look at what the car has put on the drive (for the health check)."""
+    out = []
+    try:
+        tops = sorted(mnt.iterdir())
+    except OSError:
+        return out
+    for top in tops[:12]:
+        if not top.is_dir():
+            out.append(f"{top.name} (file)")
+            continue
+        try:
+            subs = sorted(top.iterdir())
+        except OSError:
+            continue
+        for sub in subs[:12]:
+            if not sub.is_dir():
+                continue
+            try:
+                kids = sorted(sub.iterdir())
+            except OSError:
+                continue
+            files = [k for k in kids if k.is_file()]
+            dirs = [k for k in kids if k.is_dir()]
+            names = ", ".join(k.name for k in kids[-2:])
+            out.append(f"{top.name}/{sub.name}: {len(dirs)} folders, {len(files)} files; newest: {names[:110]}")
+            if dirs:
+                d = dirs[-1]
+                try:
+                    inner = sorted(d.iterdir())
+                    mb = sum(f.stat().st_size for f in inner if f.is_file()) / 1e6
+                    out.append(f"   {d.name}: {len(inner)} items, {mb:.0f} MB; e.g. {', '.join(i.name for i in inner[-2:])[:110]}")
+                except OSError:
+                    pass
+    return out[:30]
+
+
 def folder_sig(path: Path) -> tuple[str, int]:
     total, parts = 0, []
     for f in sorted(path.rglob("*")):
@@ -340,8 +377,14 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         st["image"] = image_usage(mnt)
         cam = mnt / "TeslaCam"
         kinds = [("SavedClips", cfg["DRIVE_DASHCAM_ID"], "dashcam"),
-                 ("EncryptedClips", cfg["DRIVE_DASHCAM_ID"], "encrypted"),
                  ("SentryClips", cfg["DRIVE_SENTRY_ID"], "sentry")]
+        # EncryptedClips: the car keeps writing into this folder while it records (seen on ET's car,
+        # 2026-11-10), so it is not a finished clip. Only upload it if switched on in the Pi's config.
+        if cfg.get("UPLOAD_ENCRYPTED_CLIPS", "0") == "1":
+            kinds.insert(1, ("EncryptedClips", cfg["DRIVE_DASHCAM_ID"], "encrypted"))
+        if time.time() - st.get("tree_at", 0) > 300:
+            st["tree_at"] = time.time()
+            st["tree"] = drive_tree(mnt)
         queue = []
         seen = set()
         counts = {"dashcam": 0, "sentry": 0, "encrypted": 0}
