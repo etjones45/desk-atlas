@@ -8,7 +8,7 @@ const enc = new TextEncoder();
 const now = () => Date.now() / 1000;
 const SESSION_DAYS = 180;
 // Version of this web app + server. Bump together with car/VERSION on every release.
-const APP_VERSION = "1.2";
+const APP_VERSION = "1.2.2";
 const REPO_RAW = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car";
 const COMMANDS = {
   upload_recent: "Upload recent dashcam",
@@ -275,7 +275,7 @@ async function overview(env, ctx) {
   const latest = await kvGet(env, "latest");
   const latestAt = Number(await kvGet(env, "latest_at")) || null;
   const clips = (await env.DB.prepare(
-    "SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, thumb IS NOT NULL AS has_thumb FROM clips ORDER BY uploaded_at DESC LIMIT 8").all()).results;
+    "SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, encrypted, thumb IS NOT NULL AS has_thumb FROM clips ORDER BY uploaded_at DESC LIMIT 8").all()).results;
   const alerts = (await env.DB.prepare("SELECT * FROM alerts ORDER BY at DESC LIMIT 15").all()).results;
   const commands = (await env.DB.prepare(`SELECT ${CMD_COLS} FROM commands ORDER BY created DESC LIMIT 10`).all()).results;
   const counts = await env.DB.prepare(
@@ -374,8 +374,8 @@ async function handleApp(req, env, ctx, url, path) {
     const before = Number(url.searchParams.get("before")) || 1e15;
     const limit = Math.min(Number(url.searchParams.get("limit")) || 30, 100);
     const q = kind === "all"
-      ? env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, thumb IS NOT NULL AS has_thumb FROM clips WHERE id < ? ORDER BY id DESC LIMIT ?").bind(before, limit)
-      : env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, thumb IS NOT NULL AS has_thumb FROM clips WHERE kind=? AND id < ? ORDER BY id DESC LIMIT ?").bind(kind, before, limit);
+      ? env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, encrypted, thumb IS NOT NULL AS has_thumb FROM clips WHERE id < ? ORDER BY id DESC LIMIT ?").bind(before, limit)
+      : env.DB.prepare("SELECT id, kind, folder, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, camera, files, encrypted, thumb IS NOT NULL AS has_thumb FROM clips WHERE kind=? AND id < ? ORDER BY id DESC LIMIT ?").bind(kind, before, limit);
     return json({ clips: (await q.all()).results });
   }
   const thumb = path.match(/^\/api\/clips\/(\d+)\/thumb$/);
@@ -656,12 +656,12 @@ async function handlePi(req, env, ctx, path) {
       const f = JSON.stringify(c.files.slice(0, 80).map((x) => [String(x[0]).slice(0, 19), String(x[1]).slice(0, 20), String(x[2]).slice(0, 60)]));
       if (f.length < 12000) files = f;
     }
-    await env.DB.prepare(`INSERT INTO clips(kind, folder, drive_id, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, thumb, thumb_type, files, camera)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(kind, folder) DO UPDATE SET drive_id=excluded.drive_id, drive_url=excluded.drive_url,
-      size_mb=excluded.size_mb, uploaded_at=excluded.uploaded_at, thumb=COALESCE(excluded.thumb, clips.thumb), files=COALESCE(excluded.files, clips.files)`).bind(
+    await env.DB.prepare(`INSERT INTO clips(kind, folder, drive_id, drive_url, size_mb, reason, city, lat, lon, event_ts, uploaded_at, network, thumb, thumb_type, files, camera, encrypted)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(kind, folder) DO UPDATE SET drive_id=excluded.drive_id, drive_url=excluded.drive_url,
+      size_mb=excluded.size_mb, uploaded_at=excluded.uploaded_at, thumb=COALESCE(excluded.thumb, clips.thumb), files=COALESCE(excluded.files, clips.files), encrypted=excluded.encrypted`).bind(
       kind, String(c.folder).slice(0, 80), c.drive_id || null, driveUrl, num(c.size_mb), c.reason || null, c.city || null,
       num(c.lat), num(c.lon), c.event_ts || null, now(), c.network || null, thumb, c.thumb_type || "image/png", files,
-      c.camera === undefined || c.camera === null ? null : String(c.camera).slice(0, 4)).run();
+      c.camera === undefined || c.camera === null ? null : String(c.camera).slice(0, 4), c.encrypted ? 1 : 0).run();
     const label = kind === "sentry" ? "Sentry event saved" : kind === "requested" ? "Your dashcam request is ready" : "Dashcam clip saved";
     const where = c.city ? ` in ${c.city}` : "";
     await addAlert(env, ctx, { title: label, message: `${c.folder}${where} is in Google Drive.`, category: "clip", link: "/#footage" });

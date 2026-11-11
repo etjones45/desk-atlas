@@ -542,8 +542,9 @@ def main() -> None:
                     "usb_link": usb.get("state"),
                     "usb": usb,
                     "image": up.get("image"),
-                    "pending": {"dashcam": (pend.get("dashcam") or 0) + (pend.get("encrypted") or 0),
-                                "sentry": pend.get("sentry") or 0} if up.get("pending") else None,
+                    "pending": {"dashcam": pend.get("dashcam") or 0, "sentry": pend.get("sentry") or 0,
+                                "encrypted": pend.get("encrypted") or 0} if up.get("pending") else None,
+                    "encrypted_clips": bool(up.get("encrypted_seen")),
                     "pending_mb": up.get("pending_mb"),
                     "hot_hold": bool(up.get("hot")),
                     "bwlimit": up.get("bwlimit"),
@@ -582,9 +583,12 @@ def main() -> None:
                 alert(cfg, "Pi running hot", f"{pi['cpu_temp_c']} C in the glovebox.", key="hot",
                       cooldown_s=2 * 3600, tags="fire")
             img = (up.get("image") or {})
-            if (img.get("used_pct") or 0) >= 85:
-                alert(cfg, "Dashcam drive almost full", f"{img.get('used_pct')}% used. Old clips already in Drive get "
-                      "cleared automatically at home.", key="img-full", cooldown_s=24 * 3600, tags="warning")
+            # The car keeps the drive nearly full with its own rolling footage and clears that itself.
+            # Only warn when saved/Sentry clips (which the car never clears) are taking most of the space.
+            if (img.get("used_pct") or 0) >= 90 and (img.get("clips_gb") or 0) >= 0.5 * (img.get("size_gb") or 1e9):
+                alert(cfg, "Dashcam drive almost full", f"{img.get('used_pct')}% used, {img.get('clips_gb')} GB of it saved "
+                      "clips. Clips already in Drive get cleared automatically at home.",
+                      key="img-full", cooldown_s=24 * 3600, tags="warning")
             if net == "starlink" and dish.last_ok and time.time() - dish.last_ok > 300:
                 alert(cfg, "Pi lost contact with Starlink", "On the Starlink WiFi but the dish isn't answering.",
                       key="dish-lost", cooldown_s=3600, tags="satellite")

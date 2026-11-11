@@ -1,5 +1,13 @@
 # Car Atlas versions
 
+## 1.2.2 (2026-11-10)
+- Fix: clips weren't uploading. Tesla software 2026.20+ encrypts clips and saves them in
+  TeslaCam/EncryptedClips/ (SavedClips, SentryClips, RecentClips inside). The Pi now looks there too,
+  uploads them, and the app marks them as encrypted with how to watch them.
+- "Save recent footage" works with the encrypted layout.
+- The "drive almost full" warning only fires when saved clips fill it (the car keeps the drive full of
+  its own rolling footage and clears that itself). Cleanup at home only runs when it has something to clear.
+
 ## 1.2.1 (2026-11-10)
 - The car keeps writing into its EncryptedClips folder while recording, so the Pi no longer treats that
   folder as a finished clip to upload. The health check now lists what the car has put on the drive.

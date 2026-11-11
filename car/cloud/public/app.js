@@ -8,7 +8,7 @@
     sentry: "https://drive.google.com/drive/folders/1JfANie1Q0J9mF424Ezawx67P5unRmEnX",
   };
   const INSTALL_URL = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car/install.sh";
-  const APP_VERSION = "1.2"; // this app build; the server reports its own (they match after a deploy)
+  const APP_VERSION = "1.2.2"; // this app build; the server reports its own (they match after a deploy)
 
   // ---------- icons ----------
   const P = {
@@ -370,7 +370,7 @@
     const d = folderDate(c.folder);
     const img = c.has_thumb ? `<img loading="lazy" alt="" src="/api/clips/${c.id}/thumb">` : ic(c.kind === "sentry" ? "shield" : "film");
     return `<a class="clip" data-clip="${c.id}" href="${esc(c.drive_url || DRIVE[c.kind] || DRIVE.root)}" target="_blank" rel="noopener">
-      <div class="thumb">${img}<span class="tag ${esc(c.kind)}">${kindLabel[c.kind] || "Clip"}</span></div>
+      <div class="thumb">${img}<span class="tag ${esc(c.kind)}">${kindLabel[c.kind] || "Clip"}</span>${c.encrypted ? `<span class="tag lock">${ic("lock")}Encrypted</span>` : ""}</div>
       <div class="meta"><div class="reason">${esc(reasonText(c))}</div>
       <div class="sub">${esc(friendlyDate(d) || ago(c.uploaded_at))}${c.city ? " · " + esc(c.city) : ""}</div>
       <div class="sub num">${fmtN(c.size_mb, 0, " MB")}</div></div></a>`;
@@ -390,7 +390,8 @@
     sheet(`<h2>${esc(reasonText(c))}</h2>
       <div class="muted">${esc(friendlyDate(d) || ago(c.uploaded_at))}${c.city ? " · " + esc(c.city) : ""} · ${esc(gbText(c.size_mb || 0))}${c.network ? ` · sent over ${c.network === "starlink" ? "Starlink" : c.network === "home" ? "home WiFi" : "WiFi"}` : ""}</div>
       ${c.has_thumb ? `<img class="clip-thumb" alt="" src="/api/clips/${c.id}/thumb">` : ""}
-      ${minutes.length ? `<div><div class="small muted" style="margin-bottom:6px">Jump straight to a camera</div>
+      ${c.encrypted ? `<div class="banner warn">${ic("lock")}<div>The car encrypted this clip, so it won't play straight from Drive. Download the files, then drop them on <a href="https://dashcam.tesla.com" target="_blank" rel="noopener">dashcam.tesla.com</a> (sign in with your Tesla account) to watch. Turn off <b>Encrypt Dashcam Recordings</b> in the car (Controls → Safety) and new clips play right in Drive.</div></div>` : ""}
+      ${minutes.length ? `<div><div class="small muted" style="margin-bottom:6px">${c.encrypted ? "Each camera's file in Drive (download to decrypt)" : "Jump straight to a camera"}</div>
         ${minutes.length > 1 ? `<div class="chips scroll" id="minPick">${minutes.slice(0, 12).map((m) => `<button class="chip ${m === pick ? "on" : ""}" data-min="${esc(m)}">${esc(minuteLabel(m))}</button>`).join("")}</div>` : ""}
         <div class="cams" id="camBtns">${camsFor(pick)}</div></div>` : ""}
       <div class="row">
@@ -756,6 +757,7 @@
         <div class="card-head"><h2>Dashcam drive</h2>
           <span class="pill ${cam.gadget === "attached" ? (D.carOk || !D.fresh ? "ok" : "bad") : cam.gadget === "unsupported" || cam.gadget === "error" ? "bad" : ""}">${cam.gadget === "attached" ? (D.carOk ? "Car connected" : D.fresh ? "Car not connected" : "Ready") : cam.gadget === "unsupported" ? "Not supported" : D.s ? "Checking" : "Offline"}</span></div>
         <div class="banner ${cls}">${ic(cls === "bad" ? "alert" : cam.uploading ? "upload" : "rec")}<div>${esc(status)}</div></div>
+        ${cam.encrypted_clips ? `<div class="banner warn">${ic("lock")}<div><b>Your car is encrypting its clips.</b> They still upload, but won't play in Google Drive. To watch them right in Drive, turn off <b>Encrypt Dashcam Recordings</b> in the car: Controls → Safety. Only clips recorded after that change.</div></div>` : ""}
         ${cam.uploading ? (cam.uploading.pct ? `<div class="meter"><span style="width:${cam.uploading.pct}%;background:var(--accent)"></span></div>` : `<div class="meter indet"><span></span></div>`) : ""}
         ${D.fresh && D.carOk ? `<div class="row small" style="gap:8px"><span class="dot ${D.usb.writing ? "rec-on" : ""}" style="background:${D.usb.writing ? "var(--bad)" : "var(--line)"}"></span><span class="muted">${D.usb.writing ? `The car is writing video to the Pi (last write ${esc(ago(D.usb.last_write_epoch))})` : D.usb.last_write_epoch ? `Car connected. Last video written ${esc(ago(D.usb.last_write_epoch))}` : "Car connected"}${D.usb.drops ? ` · connection reset ${D.usb.drops}× since the Pi turned on` : ""}</span></div>` : ""}
         <div class="stats">
@@ -765,7 +767,8 @@
           <div class="stat"><div class="k">Over Starlink today</div><div class="v">${fmtN(cam.starlink_uploaded_today_mb, 0, " MB")}</div></div>
         </div>
         <div><div class="row between small"><span class="muted">Drive space on the Pi</span><span class="num">${img.used_pct !== undefined ? `${img.used_pct}% used · ${img.free_gb} of ${img.size_gb} GB free` : D.usb.image_gb ? `${D.usb.image_gb} GB drive` : "—"}</span></div>
-        <div class="meter" style="margin-top:6px"><span style="width:${img.used_pct || 0}%;background:${(img.used_pct || 0) >= 85 ? "var(--bad)" : (img.used_pct || 0) >= 70 ? "var(--warn)" : "var(--accent)"}"></span></div></div>
+        <div class="meter" style="margin-top:6px"><span style="width:${img.used_pct || 0}%;background:${(img.clips_gb || 0) >= 0.5 * (img.size_gb || 1e9) ? "var(--bad)" : "var(--accent)"}"></span></div>
+        <div class="muted small" style="margin-top:6px">${img.clips_gb !== undefined ? `Saved and Sentry clips: ${img.clips_gb} GB. The rest is the car's rolling recording, which it clears on its own, so a full drive is normal.` : ""}</div></div>
       </section>
 
       ${usbCard(D)}

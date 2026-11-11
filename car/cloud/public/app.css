@@ -328,3 +328,5 @@ body.drive-mode main#view { padding-top: calc(env(safe-area-inset-top) + 12px); 
 .d-grid .stat .v { font-size: 20px; }
 .d-save { min-height: 68px; font-size: 19px; }
 @media (min-width: 760px) and (orientation: landscape) { .drive { grid-template-columns: 1.2fr 1fr; align-items: center; } .drive > .row { grid-column: 1 / -1; } .drive .d-main { grid-row: 2 / 4; } .d-save { grid-column: 1 / -1; } }
+.clip .tag.lock { left: auto; right: 8px; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,.7); }
+.clip .tag.lock svg { width: 12px; height: 12px; }

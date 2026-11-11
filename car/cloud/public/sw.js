@@ -1,6 +1,6 @@
 /* Car Atlas service worker: offline app shell + push notifications */
-const CACHE = "car-atlas-v4";
-const SHELL = ["/", "/app.css?v=4", "/app.js?v=4", "/icon.svg", "/icon-192.png", "/manifest.webmanifest"];
+const CACHE = "car-atlas-v5";
+const SHELL = ["/", "/app.css?v=5", "/app.js?v=5", "/icon.svg", "/icon-192.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

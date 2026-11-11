@@ -60,6 +60,24 @@ class ReadOnlyView:
         self.loops = []
 
 
+def clip_roots(cam: Path) -> list[tuple[Path, bool]]:
+    """Folders the car writes clips into. Tesla software 2026.20+ encrypts clips by default and puts
+    them under TeslaCam/EncryptedClips/ (SavedClips, SentryClips, RecentClips inside it)."""
+    return [(cam, False), (cam / "EncryptedClips", True)]
+
+
+def recent_dirs(cam: Path) -> list[Path]:
+    return [root / "RecentClips" for root, _ in clip_roots(cam) if (root / "RecentClips").is_dir()]
+
+
+def is_png(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return f.read(8) == b"\x89PNG\r\n\x1a\n"
+    except OSError:
+        return False
+
+
 def drive_tree(mnt: Path) -> list:
     """A short look at what the car has put on the drive (for the health check)."""
     out = []
@@ -227,7 +245,8 @@ def post_clip(cfg, kind: str, src: Path | None, dest_id: str, name: str, size: i
     if not cloud_ready(cfg):
         return
     info = {"kind": kind, "folder": name, "size_mb": round(size / 1e6, 1), "network": net,
-            "drive_id": drive_folder_id(dest_id, name)}
+            "drive_id": drive_folder_id(dest_id, name),
+            "encrypted": bool(src is not None and "EncryptedClips" in src.parts)}
     try:
         info["files"] = drive_file_links(dest_id, name)
     except Exception as e:  # noqa: BLE001 - links are a nicety
@@ -243,7 +262,7 @@ def post_clip(cfg, kind: str, src: Path | None, dest_id: str, name: str, size: i
                 info[k_dst] = None
         thumb = src / "thumb.png"
         try:
-            if thumb.is_file() and thumb.stat().st_size < 500_000:
+            if thumb.is_file() and thumb.stat().st_size < 500_000 and is_png(thumb):
                 info["thumb_b64"] = base64.b64encode(thumb.read_bytes()).decode()
                 info["thumb_type"] = "image/png"
         except OSError:
@@ -253,7 +272,10 @@ def post_clip(cfg, kind: str, src: Path | None, dest_id: str, name: str, size: i
 
 def upload_recent(cfg, mnt: Path, minutes: int, bwlimit: str, net: str) -> dict:
     """Upload the last N minutes of RecentClips into Dashcam/Recent_<time>."""
-    recent = mnt / "TeslaCam" / "RecentClips"
+    dirs = recent_dirs(mnt / "TeslaCam")
+    # Newest footage wins: with encryption on, the car writes RecentClips inside EncryptedClips.
+    dirs.sort(key=lambda d: max((f.stat().st_mtime for f in d.glob("*.mp4")), default=0), reverse=True)
+    recent = dirs[0] if dirs else mnt / "TeslaCam" / "RecentClips"
     files = list(recent.rglob("*.mp4")) if recent.is_dir() else []
     # Tesla names files like 2026-11-09_08-15-30-front.mp4 (one per camera per minute)
     stamps = sorted({f.name[:19] for f in files if len(f.name) > 19}, reverse=True)[:minutes]
@@ -320,9 +342,11 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
     if time.time() - (st.get("last_cleanup") or {}).get("at", 0) < 6 * 3600:
         return
     cutoff = time.time() - 3 * 86400
-    rows = conn.execute("SELECT kind, folder FROM uploads WHERE uploaded_at < ?", (cutoff,)).fetchall()
+    present = set(st.get("present") or [])
+    rows = [r for r in conn.execute("SELECT kind, folder FROM uploads WHERE uploaded_at < ?", (cutoff,)).fetchall()
+            if f"{r[0]}/{r[1]}" in present]
     if not rows:
-        return
+        return            # nothing uploaded is still taking space; the car manages its own rolling footage
     gadget_sh = str(Path(__file__).resolve().parent.parent / "scripts" / "teslacam-gadget.sh")
     log(C, f"drive {used}% full; cleaning up {len(rows)} uploaded folders")
     run([gadget_sh, "stop"], timeout=30)
@@ -340,9 +364,11 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
             raise RuntimeError(out)
         try:
             for kind, folder in rows:
-                sub = {"dashcam": "SavedClips", "sentry": "SentryClips", "encrypted": "EncryptedClips"}.get(kind, "SavedClips")
-                target = rw / "TeslaCam" / sub / folder
-                if target.is_dir() and target.parent.name == sub:
+                sub = {"dashcam": "SavedClips", "sentry": "SentryClips"}.get(kind, "SavedClips")
+                for root in (rw / "TeslaCam", rw / "TeslaCam" / "EncryptedClips"):
+                    target = root / sub / folder
+                    if not (target.is_dir() and target.parent.name == sub):
+                        continue
                     run(["rm", "-rf", "--one-file-system", str(target)], timeout=120)
                     removed += 1
             run(["sync"], timeout=60)
@@ -378,42 +404,47 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         cam = mnt / "TeslaCam"
         kinds = [("SavedClips", cfg["DRIVE_DASHCAM_ID"], "dashcam"),
                  ("SentryClips", cfg["DRIVE_SENTRY_ID"], "sentry")]
-        # EncryptedClips: the car keeps writing into this folder while it records (seen on ET's car,
-        # 2026-11-10), so it is not a finished clip. Only upload it if switched on in the Pi's config.
-        if cfg.get("UPLOAD_ENCRYPTED_CLIPS", "0") == "1":
-            kinds.insert(1, ("EncryptedClips", cfg["DRIVE_DASHCAM_ID"], "encrypted"))
         if time.time() - st.get("tree_at", 0) > 300:
             st["tree_at"] = time.time()
             st["tree"] = drive_tree(mnt)
         queue = []
         seen = set()
         counts = {"dashcam": 0, "sentry": 0, "encrypted": 0}
-        pending_bytes = 0
-        for sub, dest_id, kind in kinds:
-            base = cam / sub
-            if not base.is_dir():
-                continue
-            for folder in sorted(p for p in base.iterdir() if p.is_dir()):
-                sig, size = folder_sig(folder)
-                if not sig:
+        pending_bytes = clip_bytes = 0
+        st["encrypted_seen"] = False
+        for root, encrypted in clip_roots(cam):
+            for sub, dest_id, kind in kinds:
+                base = root / sub
+                if not base.is_dir():
                     continue
-                key = f"{kind}/{folder.name}"
-                seen.add(key)
-                row = conn.execute("SELECT sig FROM uploads WHERE kind=? AND folder=?",
-                                   (kind, folder.name)).fetchone()
-                if row and row[0] == sig:
-                    continue
-                counts[kind] += 1
-                pending_bytes += size
-                # Only upload once the car has stopped writing to this folder
-                if pending.get(key) == sig:
-                    queue.append((kind, folder, dest_id, sig, size))
-                pending[key] = sig
+                for folder in sorted(p for p in base.iterdir() if p.is_dir()):
+                    sig, size = folder_sig(folder)
+                    if not sig:
+                        continue
+                    clip_bytes += size
+                    if encrypted:
+                        st["encrypted_seen"] = True
+                    key = f"{kind}/{folder.name}"
+                    seen.add(key)
+                    row = conn.execute("SELECT sig FROM uploads WHERE kind=? AND folder=?",
+                                       (kind, folder.name)).fetchone()
+                    if row and row[0] == sig:
+                        continue
+                    counts[kind] += 1
+                    if encrypted:
+                        counts["encrypted"] += 1
+                    pending_bytes += size
+                    # Only upload once the car has stopped writing to this folder
+                    if pending.get(key) == sig:
+                        queue.append((kind, folder, dest_id, sig, size))
+                    pending[key] = sig
+        st["image"]["clips_gb"] = round(clip_bytes / 1e9, 1)
+        st["present"] = sorted(seen)
         for stale in [k for k in pending if k not in seen]:
             pending.pop(stale, None)
         st["pending"] = counts
         st["pending_mb"] = round(pending_bytes / 1e6)
-        st["recent_folder_present"] = (cam / "RecentClips").is_dir()
+        st["recent_folder_present"] = bool(recent_dirs(cam))
 
         if not online or not drive_ready():
             st["waiting_for"] = "internet" if not online else "google drive setup"
@@ -503,8 +534,9 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     add_budget(conn, size)
                 st["last_upload"] = {"kind": kind, "folder": folder.name, "mb": round(size / 1e6), "at": time.time()}
                 st["last_error"] = None
-                if st.get("pending", {}).get(kind):
-                    st["pending"][kind] -= 1
+                for ck in (kind, "encrypted") if "EncryptedClips" in folder.parts else (kind,):
+                    if st.get("pending", {}).get(ck):
+                        st["pending"][ck] -= 1
                 st["pending_mb"] = max(0, (st.get("pending_mb") or 0) - round(size / 1e6))
                 post_clip(cfg, "sentry" if kind == "sentry" else "dashcam", folder, dest_id, folder.name, size, net)
                 label = "Sentry event" if kind == "sentry" else "Dashcam clip"

@@ -9,3 +9,4 @@ ALTER TABLE usage_daily ADD COLUMN good_s REAL;
 CREATE TABLE IF NOT EXISTS outages (start REAL PRIMARY KEY, end REAL, cause TEXT);
 CREATE TABLE IF NOT EXISTS speedtests (at REAL PRIMARY KEY, down REAL, up REAL, ping REAL, jitter REAL, network TEXT, profile TEXT, auto INTEGER, used_mb REAL, server TEXT);
 CREATE TABLE IF NOT EXISTS drives (start REAL PRIMARY KEY, end REAL, checkins INTEGER, net TEXT);
+ALTER TABLE clips ADD COLUMN encrypted INTEGER;

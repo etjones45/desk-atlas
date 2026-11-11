@@ -303,7 +303,7 @@ def db() -> sqlite3.Connection:
 def read_json(path: Path, default=None):
     try:
         return json.loads(path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except (OSError, ValueError):          # missing, unreadable, not JSON, or binary (encrypted) data
         return default
 
 

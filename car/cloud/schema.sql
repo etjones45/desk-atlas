@@ -14,7 +14,7 @@ CREATE INDEX IF NOT EXISTS coverage_ts ON coverage(ts);
 CREATE TABLE IF NOT EXISTS clips (
   id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, folder TEXT, drive_id TEXT, drive_url TEXT,
   size_mb REAL, reason TEXT, city TEXT, lat REAL, lon REAL, event_ts TEXT, uploaded_at REAL,
-  network TEXT, thumb BLOB, thumb_type TEXT, files TEXT, camera TEXT, UNIQUE(kind, folder));
+  network TEXT, thumb BLOB, thumb_type TEXT, files TEXT, camera TEXT, encrypted INTEGER, UNIQUE(kind, folder));
 CREATE INDEX IF NOT EXISTS clips_uploaded ON clips(uploaded_at);
 CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL, title TEXT, message TEXT, category TEXT, link TEXT);
 CREATE TABLE IF NOT EXISTS commands (
