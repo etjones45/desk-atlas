@@ -1,5 +1,10 @@
 # Car Atlas versions
 
+## 1.2.4 (2026-11-10)
+- Fix: an old "save recent footage" request could restart on every Pi restart and block saved and Sentry
+  clips from ever uploading. Requests now run once, expire after 6 hours, and show live progress in the app.
+- The app sees waiting clips right away, even while something else is uploading.
+
 ## 1.2.3 (2026-11-10)
 - New diagnostic: "What's on the dashcam drive" lists every folder the car wrote and what the uploader thinks of each clip.
 

@@ -272,7 +272,7 @@ def post_clip(cfg, kind: str, src: Path | None, dest_id: str, name: str, size: i
     cloud(cfg, "POST", "/api/pi/clip", info, timeout=60)
 
 
-def upload_recent(cfg, mnt: Path, minutes: int, bwlimit: str, net: str) -> dict:
+def upload_recent(cfg, mnt: Path, minutes: int, bwlimit: str, net: str, st: dict | None = None) -> dict:
     """Upload the last N minutes of RecentClips into Dashcam/Recent_<time>."""
     dirs = recent_dirs(mnt / "TeslaCam")
     # Newest footage wins: with encryption on, the car writes RecentClips inside EncryptedClips.
@@ -290,9 +290,23 @@ def upload_recent(cfg, mnt: Path, minutes: int, bwlimit: str, net: str) -> dict:
     list_path.write_text("\n".join(str(f.relative_to(recent)) for f in chosen))
     dest = f"Recent_{stamps[0]}"
     size = sum(f.stat().st_size for f in chosen)
-    code, out = rclone(["copy", str(recent), drive_remote(cfg["DRIVE_DASHCAM_ID"], dest),
-                        "--files-from", str(list_path), "--transfers", "2"],
-                       timeout=4 * 3600, bwlimit=bwlimit)
+    if st is not None:
+        st["uploading"] = {"kind": "requested", "folder": dest, "mb": round(size / 1e6), "since": time.time(),
+                           "pct": 0, "eta_s": None, "kbps": None}
+        write_json(STATE_FILE, st)
+
+    def progress(p: dict) -> None:
+        up = (st or {}).get("uploading")
+        if up and p.get("total"):
+            up.update({"pct": round(100 * p["bytes"] / p["total"]), "eta_s": p.get("eta"),
+                       "kbps": round((p.get("speed") or 0) * 8 / 1000), "at": time.time()})
+            write_json(STATE_FILE, st)
+
+    code, out = rclone_progress(["copy", str(recent), drive_remote(cfg["DRIVE_DASHCAM_ID"], dest),
+                                 "--files-from", str(list_path), "--transfers", "2"],
+                                timeout=4 * 3600, bwlimit=bwlimit, on_stats=progress)
+    if st is not None:
+        st["uploading"] = None
     result.update({"ok": code == 0, "folder": dest, "mb": round(size / 1e6), "error": None if code == 0 else out[-300:]})
     if code == 0:
         post_clip(cfg, "requested", None, cfg["DRIVE_DASHCAM_ID"], dest, size, net)
@@ -307,8 +321,20 @@ def handle_recent_requests(cfg, mnt: Path, bwlimit: str, net: str, st: dict) -> 
     REQ_DIR.mkdir(parents=True, exist_ok=True)
     for req in sorted(REQ_DIR.glob("recent_*.json")):
         r = read_json(req, {}) or {}
+        try:
+            age = time.time() - req.stat().st_mtime
+        except OSError:
+            continue
+        if age > 6 * 3600:
+            # Too old: the footage it asked for has rolled off, and a stale request must never block new clips.
+            log(C, f"dropping old recent-footage request {req.name} ({age / 3600:.0f} h old)")
+            if r.get("id"):
+                cloud(cfg, "POST", f"/api/pi/commands/{r['id']}", {"ok": False, "result": "Expired before the Pi could do it."})
+            req.unlink(missing_ok=True)
+            continue
         minutes = max(1, min(60, int(r.get("minutes") or 10)))
-        res = upload_recent(cfg, mnt, minutes, bwlimit, net)
+        req.unlink(missing_ok=True)
+        res = upload_recent(cfg, mnt, minutes, bwlimit, net, st)
         st["last_recent_request"] = res
         if r.get("id"):
             msg = (f"{res.get('mb', 0)} MB uploaded to Dashcam/{res['folder']}" if res.get("ok")
@@ -327,8 +353,9 @@ def handle_recent_requests(cfg, mnt: Path, bwlimit: str, net: str, st: dict) -> 
         if tok.isdigit():
             minutes = max(1, min(60, int(tok)))
             break
-    st["last_recent_request"] = upload_recent(cfg, mnt, minutes, bwlimit, net)
+    # Delete the request first, so a slow or interrupted upload can never repeat forever.
     rclone(["deletefile", drive_remote(status_id, req_name)], timeout=60)
+    st["last_recent_request"] = upload_recent(cfg, mnt, minutes, bwlimit, net, st)
 
 
 def cleanup_if_needed(cfg, conn, st: dict) -> None:
@@ -447,6 +474,8 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         st["pending"] = counts
         st["pending_mb"] = round(pending_bytes / 1e6)
         st["recent_folder_present"] = bool(recent_dirs(cam))
+        st["updated"] = time.time()
+        write_json(STATE_FILE, st)
 
         if not online or not drive_ready():
             st["waiting_for"] = "internet" if not online else "google drive setup"
