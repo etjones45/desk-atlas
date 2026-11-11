@@ -1,5 +1,8 @@
 # Car Atlas versions
 
+## 1.2.3 (2026-11-10)
+- New diagnostic: "What's on the dashcam drive" lists every folder the car wrote and what the uploader thinks of each clip.
+
 ## 1.2.2 (2026-11-10)
 - Fix: clips weren't uploading. Tesla software 2026.20+ encrypts clips and saves them in
   TeslaCam/EncryptedClips/ (SavedClips, SentryClips, RecentClips inside). The Pi now looks there too,

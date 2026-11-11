@@ -337,6 +337,7 @@ OUTPUT_COMMANDS = {
     "usb_debug": "USB deep check",
     "logs": "Recent logs",
     "sysinfo": "What the Pi is busy with",
+    "drive_scan": "What's on the dashcam drive",
 }
 
 
@@ -350,6 +351,9 @@ def run_output_command(kind: str, scripts_dir: Path) -> tuple[bool, str]:
                          "-u", "car-atlas-update", "-u", "car-atlas-tune", "-n", "150", "--no-pager", "-o", "short"], timeout=30)
     elif kind == "sysinfo":
         code, out = 0, system_snapshot()
+    elif kind == "drive_scan":
+        import sys as _sys
+        code, out = run([_sys.executable, str(Path(__file__).resolve().parent / "uploader.py"), "scan"], timeout=120)
     else:
         return False, "unknown"
     out = re.sub(r"\x1b\[[0-9;]*m", "", out or "")

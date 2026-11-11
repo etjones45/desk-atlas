@@ -31,8 +31,9 @@ REQ_DIR = STATE_DIR / "requests"
 class ReadOnlyView:
     """Opens the dashcam image read-only, fresh each time so we see the car's latest writes."""
 
-    def __init__(self, image: str):
+    def __init__(self, image: str, mnt: Path | None = None):
         self.image = image
+        self.mnt = mnt or MNT
         self.loops: list[str] = []
 
     def __enter__(self):
@@ -41,21 +42,22 @@ class ReadOnlyView:
         part, self.loops = attach_image(self.image, read_only=True)
         if not part:
             return None
-        MNT.mkdir(parents=True, exist_ok=True)
+        self.mnt.mkdir(parents=True, exist_ok=True)
         fst = fs_type(part) or "vfat"
+        self.fst = fst
         opts = "ro,noatime,utf8" if fst == "vfat" else "ro,noatime"
-        code, out = run(["mount", "-t", fst, "-o", opts, part, str(MNT)])
+        code, out = run(["mount", "-t", fst, "-o", opts, part, str(self.mnt)])
         if code != 0:  # let the kernel guess
-            code, out = run(["mount", "-o", "ro,noatime", part, str(MNT)])
+            code, out = run(["mount", "-o", "ro,noatime", part, str(self.mnt)])
         if code != 0:
             log(C, f"mount failed: {out.strip()}")
             detach_loops(self.loops)
             self.loops = []
             return None
-        return MNT
+        return self.mnt
 
     def __exit__(self, *exc):
-        run(["umount", str(MNT)])
+        run(["umount", str(self.mnt)])
         detach_loops(self.loops)
         self.loops = []
 
@@ -579,7 +581,60 @@ def main() -> None:
         time.sleep(interval)
 
 
+def scan_report() -> str:
+    """Everything the Pi can see on the car's drive, and what it thinks of each clip folder."""
+    cfg = load_config()
+    conn = db()
+    out = []
+    view = ReadOnlyView(cfg["TESLACAM_IMAGE"], RUN_DIR / "teslacam-scan")
+    with view as mnt:
+        if mnt is None:
+            return "Couldn't open the dashcam drive image."
+        out.append(f"Filesystem: {getattr(view, 'fst', '?')}   {image_usage(mnt)}")
+        for root, dirs, files in os.walk(mnt):
+            rel = os.path.relpath(root, mnt)
+            depth = 0 if rel == "." else rel.count(os.sep) + 1
+            if depth > 4:
+                continue
+            size = 0
+            for f in files:
+                try:
+                    size += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+            if "RecentClips" in rel.split(os.sep):
+                if os.path.basename(root) == "RecentClips":
+                    out.append(f"{rel}/  ({len(files)} files, {size/1e6:.0f} MB, rolling recording)")
+                dirs[:] = []
+                continue
+            show = ", ".join(sorted(files)[:4]) + (" ..." if len(files) > 4 else "")
+            out.append(f"{rel}/  {len(dirs)} folders, {len(files)} files, {size/1e6:.0f} MB  {show}"[:300])
+        out.append("")
+        out.append("Clip folders the uploader would consider:")
+        cam = mnt / "TeslaCam"
+        for root, encrypted in clip_roots(cam):
+            for sub in ("SavedClips", "SentryClips"):
+                base = root / sub
+                if not base.is_dir():
+                    out.append(f"  (no {base.relative_to(mnt)})")
+                    continue
+                for folder in sorted(p for p in base.iterdir() if p.is_dir()):
+                    sig, size = folder_sig(folder)
+                    kind = "dashcam" if sub == "SavedClips" else "sentry"
+                    row = conn.execute("SELECT sig, uploaded_at FROM uploads WHERE kind=? AND folder=?", (kind, folder.name)).fetchone()
+                    state = "already uploaded" if row and row[0] == sig else ("uploaded, but changed since" if row else "NOT uploaded yet")
+                    out.append(f"  {folder.relative_to(mnt)}: {len(sig.split('|')) if sig else 0} files, {size/1e6:.0f} MB -> {state}")
+    st = read_json(STATE_FILE, {}) or {}
+    out.append("")
+    out.append(f"Uploader state: pending={st.get('pending')} waiting_for={st.get('waiting_for')} "
+               f"last_error={st.get('last_error')} drive_view={st.get('drive_view')} updated={st.get('updated')}")
+    return "\n".join(out)
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "scan":
+        print(scan_report())
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "once":
         c = load_config()
         s: dict = {}
