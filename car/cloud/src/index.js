@@ -8,7 +8,7 @@ const enc = new TextEncoder();
 const now = () => Date.now() / 1000;
 const SESSION_DAYS = 180;
 // Version of this web app + server. Bump together with car/VERSION on every release.
-const APP_VERSION = "1.2.2";
+const APP_VERSION = "1.2.7";
 const REPO_RAW = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car";
 const COMMANDS = {
   upload_recent: "Upload recent dashcam",

@@ -1,5 +1,13 @@
 # Car Atlas versions
 
+## 1.2.7 (2026-11-12)
+- Clearing uploaded clips off the Pi (which takes the drive away from the car for a few seconds) now only
+  happens when the car isn't recording (nothing written for 3+ minutes) and when it's actually needed
+  (4+ GB of uploaded clips, or the drive getting full). Sentry at home is never interrupted unless the
+  drive is about to run out.
+- After clearing, the Pi checks that the car got its drive back, retries once, and alerts you if not.
+- The Footage tab shows when clips were last cleared and how long the drive was away.
+
 ## 1.2.6 (2026-11-12)
 - Fix: a notice from rclone was being read as a "save recent footage" request, so the Pi kept uploading
   big chunks of recent footage nobody asked for, ahead of real clips. Only real request files count now.

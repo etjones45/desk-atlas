@@ -557,6 +557,7 @@ def main() -> None:
                     "starlink_uploaded_today_mb": up.get("starlink_uploaded_today_mb"),
                     "last_recent_request": up.get("last_recent_request"),
                     "last_cleanup": up.get("last_cleanup"),
+                    "cleanup_waiting": up.get("cleanup_waiting"),
                 },
                 "drive_setup": drive_ready(),
                 "drive": up.get("drive"),

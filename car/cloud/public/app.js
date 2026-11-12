@@ -8,7 +8,7 @@
     sentry: "https://drive.google.com/drive/folders/1JfANie1Q0J9mF424Ezawx67P5unRmEnX",
   };
   const INSTALL_URL = "https://raw.githubusercontent.com/etjones45/desk-atlas/car/car/install.sh";
-  const APP_VERSION = "1.2.2"; // this app build; the server reports its own (they match after a deploy)
+  const APP_VERSION = "1.2.7"; // this app build; the server reports its own (they match after a deploy)
 
   // ---------- icons ----------
   const P = {
@@ -768,7 +768,9 @@
         </div>
         <div><div class="row between small"><span class="muted">Drive space on the Pi</span><span class="num">${img.used_pct !== undefined ? `${img.used_pct}% used · ${img.free_gb} of ${img.size_gb} GB free` : D.usb.image_gb ? `${D.usb.image_gb} GB drive` : "—"}</span></div>
         <div class="meter" style="margin-top:6px"><span style="width:${img.used_pct || 0}%;background:${(img.clips_gb || 0) >= 0.5 * (img.size_gb || 1e9) ? "var(--bad)" : "var(--accent)"}"></span></div>
-        <div class="muted small" style="margin-top:6px">${img.clips_gb !== undefined ? `Saved and Sentry clips: ${img.clips_gb} GB. The rest is the car's rolling recording, which it clears on its own, so a full drive is normal.` : ""}</div></div>
+        <div class="muted small" style="margin-top:6px">${img.clips_gb !== undefined ? `Saved and Sentry clips: ${img.clips_gb} GB. The rest is the car's rolling recording, which it clears on its own, so a full drive is normal.` : ""}</div>
+        ${cam.last_cleanup && cam.last_cleanup.gap_s !== undefined ? `<div class="muted small">Last cleared ${esc(ago(cam.last_cleanup.at))}: ${cam.last_cleanup.removed} clip${cam.last_cleanup.removed === 1 ? "" : "s"} already in Drive, drive away from the car for ${cam.last_cleanup.gap_s} s${cam.last_cleanup.ok === false ? " · <b>didn't finish cleanly, check the Pi tab</b>" : ""}.</div>` : ""}
+        ${cam.cleanup_waiting ? `<div class="muted small">Uploaded clips will be cleared off the Pi once ${esc(cam.cleanup_waiting)}.</div>` : ""}</div>
       </section>
 
       ${usbCard(D)}

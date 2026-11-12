@@ -384,30 +384,54 @@ def handle_recent_requests(cfg, mnt: Path, bwlimit: str, net: str, st: dict) -> 
 
 def cleanup_if_needed(cfg, conn, st: dict) -> None:
     """Clear saved/Sentry clips off the Pi once they're safely in Google Drive, so the car never runs out
-    of room (when the drive gets full, the car starts deleting clips on its own).
+    of room (when its drive fills up, the car starts deleting clips on its own).
 
-    Only when parked at HOME, at most every 30 minutes, and only folders whose files exactly match what
-    was uploaded. The drive is unplugged from the car for ~10 seconds while this happens.
+    To do this the Pi has to take the drive away from the car for a few seconds. So it only happens when:
+    - the car is parked at HOME (on the home WiFi), and
+    - the car isn't recording: nothing written to the drive for 3+ minutes (so never mid-drive, never while
+      Sentry is watching), and
+    - it's actually needed: uploaded clips are taking 4+ GB, or the drive is getting full.
+    If Sentry is on at home for hours and the drive is about to run out, it goes ahead anyway: a few seconds
+    without a drive is better than the car deleting clips.
+    Only folders whose files exactly match what was uploaded are removed. At most every 30 minutes.
     """
     if st.get("network") != "home":
         return
     if time.time() - (st.get("last_cleanup") or {}).get("at", 0) < 30 * 60:
         return
-    used = (st.get("image") or {}).get("used_pct") or 0
+    img = st.get("image") or {}
+    used = img.get("used_pct") or 0
+    size_gb = img.get("size_gb") or 0
+    free_gb = img.get("free_gb")
     safe = set(st.get("in_drive") or [])
     rows = [(k.split("/", 1)[0], k.split("/", 1)[1]) for k in sorted(safe) if "/" in k]
     if not rows:
         return            # nothing uploaded is still taking space; the car manages its own rolling footage
+    in_drive_gb = (st.get("in_drive_bytes") or 0) / 1e9
+    needed = in_drive_gb >= 4 or (size_gb and free_gb is not None and free_gb < 0.25 * size_gb)
+    urgent = bool(size_gb and free_gb is not None and free_gb < 0.10 * size_gb and in_drive_gb >= 0.15 * size_gb)
+    if not needed:
+        return
+    usb = usb_info()
+    last_write = usb.get("last_write_epoch") or 0
+    car_busy = bool(usb.get("car_connected") and time.time() - last_write < 180)
+    if car_busy and not urgent:
+        st["cleanup_waiting"] = "the car to stop recording"
+        return
+    st["cleanup_waiting"] = None
     gadget_sh = str(Path(__file__).resolve().parent.parent / "scripts" / "teslacam-gadget.sh")
-    log(C, f"clearing {len(rows)} clips that are already in Google Drive (drive {used}% full)")
+    log(C, f"clearing {len(rows)} clips ({in_drive_gb:.1f} GB) that are already in Google Drive "
+           f"(drive {used}% full{', car recording' if car_busy else ''})")
+    t0 = time.time()
     run([gadget_sh, "stop"], timeout=30)
-    removed, loops = 0, []
+    removed, loops, error = 0, [], None
     try:
         part, loops = attach_image(cfg["TESLACAM_IMAGE"], read_only=False)
         if not part:
             raise RuntimeError("could not attach the drive image")
         fst = fs_type(part) or "vfat"
-        run(["fsck.exfat" if fst == "exfat" else "fsck.vfat", "-y" if fst == "exfat" else "-a", part], timeout=300)
+        # Repair anything left half-written, the same check a computer runs on a USB stick.
+        run(["fsck.exfat" if fst == "exfat" else "fsck.vfat", "-y" if fst == "exfat" else "-a", part], timeout=120)
         rw = RUN_DIR / "teslacam-rw"
         rw.mkdir(parents=True, exist_ok=True)
         code, out = run(["mount", "-t", fst, "-o", "rw,noatime", part, str(rw)])
@@ -426,12 +450,31 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
         finally:
             run(["umount", str(rw)], timeout=60)
     except Exception as e:  # noqa: BLE001
-        log(C, f"cleanup error: {e}")
+        error = str(e)[:200]
+        log(C, f"cleanup error: {error}")
     finally:
         detach_loops(loops)
         run([gadget_sh, "start"], timeout=120)
-    st["last_cleanup"] = {"at": time.time(), "removed": removed, "was_used_pct": used}
-    log(C, f"cleanup removed {removed} folders; drive re-attached")
+    # Make sure the car got its drive back. Retry once, then shout.
+    back = False
+    for attempt in range(2):
+        for _ in range(10):
+            time.sleep(1)
+            if usb_info().get("bound"):
+                back = True
+                break
+        if back:
+            break
+        log(C, "drive didn't come back after cleanup; trying again")
+        run([gadget_sh, "rebind"], timeout=60)
+    gap = round(time.time() - t0)
+    st["last_cleanup"] = {"at": time.time(), "removed": removed, "was_used_pct": used, "gap_s": gap,
+                          "car_was_recording": car_busy, "ok": back and not error, "error": error}
+    if not back:
+        alert(cfg, "Dashcam drive didn't come back", "The Pi cleared old clips but couldn't hand the drive back to "
+              "the car. It will keep trying. Check the app's Pi tab, or restart the Pi.",
+              key="cleanup-noreturn", cooldown_s=3600, tags="rotating_light")
+    log(C, f"cleanup removed {removed} folders; drive away for {gap}s; back: {back}")
 
 
 def cycle(cfg, conn, st: dict, pending: dict) -> None:
@@ -463,6 +506,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         counts = {"dashcam": 0, "sentry": 0, "encrypted": 0}
         pending_bytes = clip_bytes = 0
         in_drive: list[str] = []
+        in_drive_bytes = 0
         st["encrypted_seen"] = False
         for root, encrypted in clip_roots(cam):
             for sub, dest_id, kind in kinds:
@@ -482,6 +526,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                                        (kind, folder.name)).fetchone()
                     if row and row[0] == sig:
                         in_drive.append(key)
+                        in_drive_bytes += size
                         continue
                     counts[kind] += 1
                     if encrypted:
@@ -494,6 +539,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         st["image"]["clips_gb"] = round(clip_bytes / 1e9, 1)
         st["present"] = sorted(seen)
         st["in_drive"] = sorted(in_drive)
+        st["in_drive_bytes"] = in_drive_bytes
         for stale in [k for k in pending if k not in seen]:
             pending.pop(stale, None)
         st["pending"] = counts
