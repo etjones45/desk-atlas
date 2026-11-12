@@ -1,5 +1,17 @@
 # Car Atlas versions
 
+## 1.2.8 (2026-11-12)
+Full review of the footage path. Fixes:
+- Clip links: the Pi couldn't read Drive's answers when rclone added a notice, so clips reached the app
+  with no direct link, no per-camera buttons, and no Drive space reading. Fixed (answers and notices are
+  now kept apart everywhere).
+- 30-day cleanup now goes by the date in each clip folder's name, not file timestamps (the car's files can
+  carry bogus dates like 1980). It only touches folders named like a clip, inside Dashcam and Sentry.
+- If the internet drops right as a clip finishes, the app still hears about it once back online.
+- Away from home, uploaded clips are cleared off the Pi if the drive is about to run out.
+- Leftover repair files (FSCK*.REC) are removed during clearing.
+- Faster uploads on home WiFi (bigger chunks, 4 files at once).
+
 ## 1.2.7 (2026-11-12)
 - Clearing uploaded clips off the Pi (which takes the drive away from the car for a few seconds) now only
   happens when the car isn't recording (nothing written for 3+ minutes) and when it's actually needed

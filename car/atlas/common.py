@@ -373,6 +373,18 @@ def rclone(args: list[str], timeout: int = 120, bwlimit: str | None = None) -> t
     return run(cmd + args, timeout=timeout)
 
 
+def rclone_out(args: list[str], timeout: int = 120) -> tuple[int, str, str]:
+    """rclone where the answer is read by code: returns (code, stdout, stderr) kept apart, so rclone's
+    own notices can never be mistaken for data."""
+    cmd = ["rclone", "--config", str(RCLONE_CONF), "--retries", "3", "--low-level-retries", "10",
+           "--contimeout", "20s", "--timeout", "60s"]
+    try:
+        p = subprocess.run(cmd + args, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return 124, "", str(e)
+
+
 def rclone_progress(args: list[str], timeout: int = 6 * 3600, bwlimit: str | None = None,
                     on_stats=None) -> tuple[int, str]:
     """Like rclone(), but calls on_stats({"bytes","total","speed","eta"}) every ~15 s while it runs."""

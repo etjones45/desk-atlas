@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (RUN_DIR, SPEED_LIMITS, STATE_DIR, alert, app_settings, attach_image, cfg_int, cloud,  # noqa: E402
                     cloud_ready, cpu_temp, db, detach_loops, drive_ready, drive_remote, fs_type, internet_up,
-                    load_config, log, network_kind, rclone, rclone_progress, read_json, run, today,
+                    load_config, log, network_kind, queue_for_cloud, rclone, rclone_out, rclone_progress, read_json, run, today,
                     usb_info, wifi_info, write_json)
 
 C = "uploader"
@@ -166,7 +166,8 @@ def upload_folder(cfg, src: Path, dest_folder_id: str, name: str, bwlimit: str, 
         write_json(STATE_FILE, st)
 
     code, out = rclone_progress(["copy", str(src), drive_remote(dest_folder_id, name),
-                                 "--transfers", "2", "--checkers", "4"],
+                                 "--transfers", "2" if bwlimit and bwlimit != "0" else "4", "--checkers", "4",
+                                 "--drive-chunk-size", "32M"],
                                 timeout=6 * 3600, bwlimit=bwlimit, on_stats=progress)
     return code == 0, out[-400:]
 
@@ -177,8 +178,8 @@ CAMERAS = ("front", "back", "left_repeater", "right_repeater", "left_pillar", "r
 def drive_file_links(dest_folder_id: str, name: str) -> list | None:
     """Drive IDs of each camera's video in an uploaded clip folder, so the app can open one directly.
     Returns [[minute_stamp, camera, drive_id], ...] newest minute first (capped)."""
-    code, out = rclone(["lsjson", "-R", "--files-only", "--no-modtime", "--no-mimetype",
-                        drive_remote(dest_folder_id, name)], timeout=120)
+    code, out, _ = rclone_out(["lsjson", "-R", "--files-only", "--no-modtime", "--no-mimetype",
+                               drive_remote(dest_folder_id, name)], timeout=120)
     if code != 0:
         return None
     try:
@@ -201,8 +202,10 @@ def drive_about(st: dict) -> None:
     """How full Google Drive is (checked every 30 min)."""
     if time.time() - (st.get("drive") or {}).get("at", 0) < 1800:
         return
-    code, out = rclone(["about", "gdrive:", "--json"], timeout=60)
+    code, out, err = rclone_out(["about", "gdrive:", "--json"], timeout=60)
     if code != 0:
+        log(C, f"drive space check failed: {err.strip()[-160:]}")
+        st["drive"] = {"at": time.time() - 1500}      # try again in 5 minutes, not every minute
         return
     try:
         j = json.loads(out[out.index("{"):])
@@ -214,6 +217,20 @@ def drive_about(st: dict) -> None:
 
 
 RETENTION_TYPES = ["*.mp4", "*.MP4", "event.json", "thumb.png", "-README_*.txt"]
+CLIP_FOLDER = re.compile(r"(?:Recent_)?(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})")
+
+
+def clip_folder_age_days(name: str) -> float | None:
+    """Age of a clip folder from the date in its name (2026-11-10_06-55-44 or Recent_2026-...).
+    Anything not named like a clip folder returns None and is never touched."""
+    m = CLIP_FOLDER.fullmatch(name)
+    if not m:
+        return None
+    try:
+        t = time.mktime(tuple(int(x) for x in m.groups()) + (0, 0, -1))
+    except (ValueError, OverflowError):
+        return None
+    return (time.time() - t) / 86400
 
 
 def apply_retention(cfg, st: dict, days: int) -> None:
@@ -221,10 +238,11 @@ def apply_retention(cfg, st: dict, days: int) -> None:
 
     Safety rails:
     - Only inside the Tesla Footage/Dashcam and Tesla Footage/Sentry folders (by their fixed Drive IDs).
-      Nothing else in Google Drive can be reached: not Tesla Footage itself, not Pi Status, not anything outside.
-    - Only the file types the car makes (videos, event.json, thumb.png, Tesla's README). Anything else you
-      put in those folders is never touched.
-    - Age is when the car recorded it. Deleted files go to Drive's trash (Google keeps them 30 more days).
+      Nothing else in Google Drive can be reached.
+    - Only folders named like a clip (a date, or Recent_ + a date). Age comes from that date, never from
+      file timestamps (the car's files can carry bogus ones, like 1980).
+    - Inside those, only the file types the car makes. Anything else is left, and so is its folder.
+    - Deleted files go to Drive's trash (Google keeps them 30 more days).
     """
     if not days or days < 7:
         return
@@ -238,24 +256,32 @@ def apply_retention(cfg, st: dict, days: int) -> None:
     include = []
     for pattern in RETENTION_TYPES:
         include += ["--include", pattern]
-    removed = 0
+    folders = files = 0
     for fid in targets:
-        code, out = rclone(["delete", drive_remote(fid), *include, "--min-age", f"{int(days)}d",
-                            "--drive-use-trash=true", "-v"], timeout=900)
+        code, out, err = rclone_out(["lsf", "--dirs-only", drive_remote(fid)], timeout=300)
         if code != 0:
-            log(C, f"retention: delete failed: {out[-200:]}")
+            log(C, f"retention: couldn't list Drive: {err.strip()[-160:]}")
             return
-        removed += out.count("Deleted")
-        # Remove clip folders that are now empty (folders that still hold anything are left alone).
-        rclone(["rmdirs", drive_remote(fid), "--leave-root"], timeout=900)
+        for line in out.splitlines():
+            name = line.strip().rstrip("/")
+            age = clip_folder_age_days(name)
+            if age is None or age <= days:
+                continue
+            code, out2 = rclone(["delete", drive_remote(fid, name), *include, "--drive-use-trash=true", "-v"], timeout=600)
+            if code != 0:
+                log(C, f"retention: delete failed for {name}: {out2[-160:]}")
+                continue
+            files += out2.count(": Deleted")
+            folders += 1
+            rclone(["rmdir", drive_remote(fid, name)], timeout=120)      # only succeeds if it's now empty
     st["retention_at"] = time.time()
-    st["retention"] = {"at": time.time(), "days": int(days), "files_removed": removed}
-    if removed:
-        log(C, f"retention: moved {removed} files older than {days} days to Drive trash")
+    st["retention"] = {"at": time.time(), "days": int(days), "files_removed": files, "folders": folders}
+    if folders:
+        log(C, f"retention: moved {folders} clip folders ({files} files) older than {days} days to Drive trash")
 
 
 def drive_folder_id(dest_folder_id: str, name: str) -> str | None:
-    code, out = rclone(["lsjson", "--stat", drive_remote(dest_folder_id, name)], timeout=60)
+    code, out, _ = rclone_out(["lsjson", "--stat", drive_remote(dest_folder_id, name)], timeout=60)
     if code != 0:
         return None
     try:
@@ -291,7 +317,8 @@ def post_clip(cfg, kind: str, src: Path | None, dest_id: str, name: str, size: i
                 info["thumb_type"] = "image/png"
         except OSError:
             pass
-    cloud(cfg, "POST", "/api/pi/clip", info, timeout=60)
+    if cloud(cfg, "POST", "/api/pi/clip", info, timeout=60) is None:
+        queue_for_cloud("/api/pi/clip", info)          # the app hears about it once we're back online
 
 
 def upload_recent(cfg, mnt: Path, minutes: int, bwlimit: str, net: str, st: dict | None = None) -> dict:
@@ -365,13 +392,13 @@ def handle_recent_requests(cfg, mnt: Path, bwlimit: str, net: str, st: dict) -> 
         req.unlink(missing_ok=True)
 
     status_id = cfg["DRIVE_STATUS_ID"]
-    code, out = rclone(["lsf", drive_remote(status_id), "--include", "request_recent*.txt"], timeout=60)
+    code, out, _ = rclone_out(["lsf", drive_remote(status_id), "--include", "request_recent*.txt"], timeout=60)
     # rclone's output can include its own notices; only an actual request file name counts.
     names = [ln.strip() for ln in out.splitlines() if re.fullmatch(r"request_recent[\w.-]*\.txt", ln.strip())]
     if code != 0 or not names:
         return
     req_name = names[0]
-    _, body = rclone(["cat", drive_remote(status_id, req_name)], timeout=60)
+    _, body, _ = rclone_out(["cat", drive_remote(status_id, req_name)], timeout=60)
     minutes = 10
     for tok in body.replace(",", " ").split():
         if tok.isdigit():
@@ -387,7 +414,7 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
     of room (when its drive fills up, the car starts deleting clips on its own).
 
     To do this the Pi has to take the drive away from the car for a few seconds. So it only happens when:
-    - the car is parked at HOME (on the home WiFi), and
+    - the car is parked at HOME (on the home WiFi), or anywhere if the drive is about to run out, and
     - the car isn't recording: nothing written to the drive for 3+ minutes (so never mid-drive, never while
       Sentry is watching), and
     - it's actually needed: uploaded clips are taking 4+ GB, or the drive is getting full.
@@ -395,8 +422,6 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
     without a drive is better than the car deleting clips.
     Only folders whose files exactly match what was uploaded are removed. At most every 30 minutes.
     """
-    if st.get("network") != "home":
-        return
     if time.time() - (st.get("last_cleanup") or {}).get("at", 0) < 30 * 60:
         return
     img = st.get("image") or {}
@@ -412,6 +437,8 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
     urgent = bool(size_gb and free_gb is not None and free_gb < 0.10 * size_gb and in_drive_gb >= 0.15 * size_gb)
     if not needed:
         return
+    if st.get("network") != "home" and not urgent:
+        return            # away from home, only when the drive is about to run out
     usb = usb_info()
     last_write = usb.get("last_write_epoch") or 0
     car_busy = bool(usb.get("car_connected") and time.time() - last_write < 180)
@@ -446,6 +473,12 @@ def cleanup_if_needed(cfg, conn, st: dict) -> None:
                         continue
                     run(["rm", "-rf", "--one-file-system", str(target)], timeout=120)
                     removed += 1
+            # Leftovers from drive repairs (FSCK0000.REC ...) are just wasted space.
+            for junk in rw.glob("FSCK*.REC"):
+                try:
+                    junk.unlink()
+                except OSError:
+                    pass
             run(["sync"], timeout=60)
         finally:
             run(["umount", str(rw)], timeout=60)
