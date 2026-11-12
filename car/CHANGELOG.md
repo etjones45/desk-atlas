@@ -1,5 +1,13 @@
 # Car Atlas versions
 
+## 1.2.6 (2026-11-12)
+- Fix: a notice from rclone was being read as a "save recent footage" request, so the Pi kept uploading
+  big chunks of recent footage nobody asked for, ahead of real clips. Only real request files count now.
+- Saved and Sentry clips upload first; recent-footage requests go after them.
+- Clips are cleared off the Pi soon after they're safely in Drive (when parked at home, at most every
+  30 min, only if the files match what was uploaded), so the car's drive never fills up and the car
+  never has to delete clips on its own.
+
 ## 1.2.5 (2026-11-12)
 - "Keep footage in Drive for" is locked to car footage only: it can only touch the Dashcam and Sentry folders,
   and only the file types the car makes (videos, event.json, thumb.png, Tesla's README). Anything else you put

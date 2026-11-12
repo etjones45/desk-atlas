@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -365,9 +366,11 @@ def handle_recent_requests(cfg, mnt: Path, bwlimit: str, net: str, st: dict) -> 
 
     status_id = cfg["DRIVE_STATUS_ID"]
     code, out = rclone(["lsf", drive_remote(status_id), "--include", "request_recent*.txt"], timeout=60)
-    if code != 0 or not out.strip():
+    # rclone's output can include its own notices; only an actual request file name counts.
+    names = [ln.strip() for ln in out.splitlines() if re.fullmatch(r"request_recent[\w.-]*\.txt", ln.strip())]
+    if code != 0 or not names:
         return
-    req_name = out.strip().splitlines()[0].strip()
+    req_name = names[0]
     _, body = rclone(["cat", drive_remote(status_id, req_name)], timeout=60)
     minutes = 10
     for tok in body.replace(",", " ").split():
@@ -380,25 +383,23 @@ def handle_recent_requests(cfg, mnt: Path, bwlimit: str, net: str, st: dict) -> 
 
 
 def cleanup_if_needed(cfg, conn, st: dict) -> None:
-    """Free space on the dashcam drive so the car never stops recording because it's full.
+    """Clear saved/Sentry clips off the Pi once they're safely in Google Drive, so the car never runs out
+    of room (when the drive gets full, the car starts deleting clips on its own).
 
-    Only runs at HOME (car parked in the garage), only when the drive is 70%+ full, and only deletes
-    clip folders that are already confirmed in Google Drive and are older than 3 days. The drive is
-    unplugged from the car for ~10 seconds while this happens, then plugged back in.
+    Only when parked at HOME, at most every 30 minutes, and only folders whose files exactly match what
+    was uploaded. The drive is unplugged from the car for ~10 seconds while this happens.
     """
+    if st.get("network") != "home":
+        return
+    if time.time() - (st.get("last_cleanup") or {}).get("at", 0) < 30 * 60:
+        return
     used = (st.get("image") or {}).get("used_pct") or 0
-    if st.get("network") != "home" or used < 70:
-        return
-    if time.time() - (st.get("last_cleanup") or {}).get("at", 0) < 6 * 3600:
-        return
-    cutoff = time.time() - 3 * 86400
-    present = set(st.get("present") or [])
-    rows = [r for r in conn.execute("SELECT kind, folder FROM uploads WHERE uploaded_at < ?", (cutoff,)).fetchall()
-            if f"{r[0]}/{r[1]}" in present]
+    safe = set(st.get("in_drive") or [])
+    rows = [(k.split("/", 1)[0], k.split("/", 1)[1]) for k in sorted(safe) if "/" in k]
     if not rows:
         return            # nothing uploaded is still taking space; the car manages its own rolling footage
     gadget_sh = str(Path(__file__).resolve().parent.parent / "scripts" / "teslacam-gadget.sh")
-    log(C, f"drive {used}% full; cleaning up {len(rows)} uploaded folders")
+    log(C, f"clearing {len(rows)} clips that are already in Google Drive (drive {used}% full)")
     run([gadget_sh, "stop"], timeout=30)
     removed, loops = 0, []
     try:
@@ -461,6 +462,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
         seen = set()
         counts = {"dashcam": 0, "sentry": 0, "encrypted": 0}
         pending_bytes = clip_bytes = 0
+        in_drive: list[str] = []
         st["encrypted_seen"] = False
         for root, encrypted in clip_roots(cam):
             for sub, dest_id, kind in kinds:
@@ -479,6 +481,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     row = conn.execute("SELECT sig FROM uploads WHERE kind=? AND folder=?",
                                        (kind, folder.name)).fetchone()
                     if row and row[0] == sig:
+                        in_drive.append(key)
                         continue
                     counts[kind] += 1
                     if encrypted:
@@ -490,6 +493,7 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                     pending[key] = sig
         st["image"]["clips_gb"] = round(clip_bytes / 1e9, 1)
         st["present"] = sorted(seen)
+        st["in_drive"] = sorted(in_drive)
         for stale in [k for k in pending if k not in seen]:
             pending.pop(stale, None)
         st["pending"] = counts
@@ -528,11 +532,19 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                   f"Only {drive_free} GB left in Google Drive. Clips stop uploading when it runs out.",
                   key="drive-low", cooldown_s=24 * 3600, tags="warning")
 
-        # Something you asked for in the app always goes, even when automatic uploads are held.
-        try:
-            handle_recent_requests(cfg, mnt, bwlimit, net, st)
-        except Exception as e:  # noqa: BLE001
-            log(C, f"recent request failed: {e}")
+        # Saved and Sentry clips go first (the car deletes them on its own if its drive fills up).
+        # A "save recent footage" request goes right away when nothing else is waiting or uploads are paused,
+        # otherwise right after the clips.
+        def do_requests() -> None:
+            try:
+                handle_recent_requests(cfg, mnt, bwlimit, net, st)
+            except Exception as e:  # noqa: BLE001
+                log(C, f"recent request failed: {e}")
+        if not queue or S.get("uploads_paused"):
+            do_requests()
+            queue_then_requests = False
+        else:
+            queue_then_requests = True
 
         # Reasons to hold automatic uploads for now
         temp = cpu_temp()
@@ -602,6 +614,8 @@ def cycle(cfg, conn, st: dict, pending: dict) -> None:
                 alert(cfg, "Clip upload failed", f"{folder.name}: will retry automatically.",
                       key="upload-failed", cooldown_s=3 * 3600, tags="warning")
                 break
+        if queue_then_requests:
+            do_requests()
 
 
 def main() -> None:

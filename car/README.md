@@ -18,8 +18,8 @@ Orange Pi Zero 2W in the glovebox + Starlink Mini in the back window. Current ve
   `Tesla Footage/Dashcam`, Sentry events -> `Tesla Footage/Sentry`. Read-only access while the car owns
   the drive (FAT32 or exFAT); a folder is uploaded only after it stops changing. Capped on Starlink,
   unlimited at home. The rolling last hour (RecentClips) is uploaded only on request (app button).
-- **Frees space** at home: when the drive is 70%+ full, deletes clips that are already in Drive and
-  older than 3 days (the drive is unplugged from the car for ~10 s while this runs).
+- **Frees space** at home: clips that are safely in Drive are cleared off the Pi (at most every 30 min;
+  the drive is unplugged from the car for ~10 s while this runs). Google Drive is the long-term copy.
 - **Starlink + Pi health** (`atlas/monitor.py`): dish state, ping, drops, obstructions, alerts, power,
   data usage, Pi temp/WiFi/Tailscale, dashcam USB link.
 - **Location**: Starlink removed dish GPS from its local API in May 2026. A USB GPS (`atlas/gps.py`)
