@@ -212,19 +212,40 @@ def drive_about(st: dict) -> None:
                    "free_gb": gb(j.get("free")), "trash_gb": gb(j.get("trashed"))}
 
 
+RETENTION_TYPES = ["*.mp4", "*.MP4", "event.json", "thumb.png", "-README_*.txt"]
+
+
 def apply_retention(cfg, st: dict, days: int) -> None:
-    """If turned on in the app: once a day, move Drive footage older than N days to Drive's trash."""
+    """If turned on in the app: once a day, move car footage older than N days to Drive's trash.
+
+    Safety rails:
+    - Only inside the Tesla Footage/Dashcam and Tesla Footage/Sentry folders (by their fixed Drive IDs).
+      Nothing else in Google Drive can be reached: not Tesla Footage itself, not Pi Status, not anything outside.
+    - Only the file types the car makes (videos, event.json, thumb.png, Tesla's README). Anything else you
+      put in those folders is never touched.
+    - Age is when the car recorded it. Deleted files go to Drive's trash (Google keeps them 30 more days).
+    """
     if not days or days < 7:
         return
     if time.time() - st.get("retention_at", 0) < 20 * 3600:
         return
+    targets = [cfg.get("DRIVE_DASHCAM_ID"), cfg.get("DRIVE_SENTRY_ID")]
+    blocked = {cfg.get("DRIVE_ROOT_ID"), cfg.get("DRIVE_STATUS_ID"), "", None, "root"}
+    if any(t in blocked for t in targets):
+        log(C, "retention: folder settings look wrong; not deleting anything")
+        return
+    include = []
+    for pattern in RETENTION_TYPES:
+        include += ["--include", pattern]
     removed = 0
-    for fid in (cfg["DRIVE_DASHCAM_ID"], cfg["DRIVE_SENTRY_ID"]):
-        code, out = rclone(["delete", drive_remote(fid), "--min-age", f"{int(days)}d", "-v"], timeout=900)
+    for fid in targets:
+        code, out = rclone(["delete", drive_remote(fid), *include, "--min-age", f"{int(days)}d",
+                            "--drive-use-trash=true", "-v"], timeout=900)
         if code != 0:
             log(C, f"retention: delete failed: {out[-200:]}")
             return
         removed += out.count("Deleted")
+        # Remove clip folders that are now empty (folders that still hold anything are left alone).
         rclone(["rmdirs", drive_remote(fid), "--leave-root"], timeout=900)
     st["retention_at"] = time.time()
     st["retention"] = {"at": time.time(), "days": int(days), "files_removed": removed}

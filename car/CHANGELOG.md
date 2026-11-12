@@ -1,5 +1,10 @@
 # Car Atlas versions
 
+## 1.2.5 (2026-11-12)
+- "Keep footage in Drive for" is locked to car footage only: it can only touch the Dashcam and Sentry folders,
+  and only the file types the car makes (videos, event.json, thumb.png, Tesla's README). Anything else you put
+  there is left alone. Deleted footage goes to Drive's trash first.
+
 ## 1.2.4 (2026-11-10)
 - Fix: an old "save recent footage" request could restart on every Pi restart and block saved and Sentry
   clips from ever uploading. Requests now run once, expire after 6 hours, and show live progress in the app.
